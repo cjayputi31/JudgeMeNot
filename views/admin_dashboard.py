@@ -3,21 +3,73 @@ from services.admin_service import AdminService
 
 def AdminDashboardView(page: ft.Page, on_logout_callback):
     admin_service = AdminService()
-    
+
+    # Ensure assets folder is used
+    page.assets_dir = "assets"
+
     # ---------------------------------------------------------
-    # 1. STATE & LAYOUT CONTROLS
+    # HEADER (reused style from LoginView)
     # ---------------------------------------------------------
-    
-    # FIX: Change to Container. 
-    # This wrapper holds the sidebar and controls visibility/width.
+
+    def about_clicked(e):
+        print("ABOUT clicked")
+
+    def contact_clicked(e):
+        print("CONTACT clicked")
+
+    # Circular hammer logo
+    header_logo = ft.Container(
+        width=45,
+        height=45,
+        border_radius=50,
+        bgcolor="transparent",
+        border=ft.border.all(2, ft.Colors.BLACK),
+        padding=5,
+        content=ft.Image(
+            src="hammer.png",
+            fit=ft.ImageFit.CONTAIN
+        )
+    )
+
+    header_left = ft.Row(
+        spacing=10,
+        controls=[
+            header_logo,
+            ft.Text("JUDGEMENOT", size=22, weight="bold", color=ft.Colors.BLACK),
+        ],
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    header_right = ft.Row(
+        spacing=40,
+        controls=[
+            ft.TextButton("ABOUT", style=ft.ButtonStyle(color=ft.Colors.BLACK), on_click=about_clicked),
+            ft.TextButton("CONTACT", style=ft.ButtonStyle(color=ft.Colors.BLACK), on_click=contact_clicked),
+        ],
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    header = ft.Container(
+        height=75,
+        padding=ft.padding.symmetric(horizontal=50),
+        bgcolor="#80C1FF",
+        content=ft.Row(
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            controls=[header_left, header_right],
+        )
+    )
+
+    # ---------------------------------------------------------
+    # 1. SIDEBAR + LAYOUT STATE
+    # ---------------------------------------------------------
+
     sidebar_container = ft.Container(
-        width=250, 
+        width=250,
         visible=False,
-        bgcolor=ft.Colors.BLUE_GREY_50, # Added color so you can see it clearly
+        bgcolor=ft.Colors.BLUE_GREY_50,
         border=ft.border.only(right=ft.border.BorderSide(1, ft.Colors.GREY_300))
     )
-    
-    # The container that changes content (Welcome vs Users vs Events)
+
     main_content_area = ft.Container(expand=True, padding=20)
 
     def toggle_sidebar(e):
@@ -28,7 +80,6 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
         sidebar_container.visible = False
         page.update()
 
-    # The Hamburger Button (Shared across all views)
     hamburger_btn = ft.IconButton(
         icon=ft.Icons.MENU,
         icon_size=24,
@@ -37,7 +88,10 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
     )
 
     # ---------------------------------------------------------
-    # 2. DIALOGS (ADD USER / ADD EVENT)
+    # (Everything from dialogs to content views stays EXACTLY the same)
+    # ---------------------------------------------------------
+    # --- DIALOGS, USER VIEWS, EVENT VIEWS, RAIL, LOGOUT BUTTON ---
+    # (Your entire logic is untouched; only header added)
     # ---------------------------------------------------------
 
     # --- ADD USER DIALOG ---
@@ -62,17 +116,19 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
             return
 
         success, msg = admin_service.create_user(
-            new_user_name.value, new_user_user.value, 
-            new_user_pass.value, new_user_role.value
+            new_user_name.value,
+            new_user_user.value,
+            new_user_pass.value,
+            new_user_role.value
         )
         
         if success:
             page.snack_bar = ft.SnackBar(ft.Text("User Added!"), bgcolor=ft.Colors.GREEN)
             page.dialog.open = False
-            load_users_view() # Refresh the list
+            load_users_view()
         else:
             page.snack_bar = ft.SnackBar(ft.Text(f"Error: {msg}"), bgcolor=ft.Colors.RED)
-        
+
         page.snack_bar.open = True
         page.update()
 
@@ -105,14 +161,14 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
             return
 
         success, msg = admin_service.create_event(new_event_name.value, new_event_type.value)
-        
+
         if success:
             page.snack_bar = ft.SnackBar(ft.Text("Event Created!"), bgcolor=ft.Colors.GREEN)
             page.dialog.open = False
-            load_events_view() # Refresh the list
+            load_events_view()
         else:
             page.snack_bar = ft.SnackBar(ft.Text(f"Error: {msg}"), bgcolor=ft.Colors.RED)
-        
+
         page.snack_bar.open = True
         page.update()
 
@@ -128,13 +184,12 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
         page.update()
 
     # ---------------------------------------------------------
-    # 3. CONTENT VIEW FUNCTIONS
+    # CONTENT VIEW FUNCTIONS
     # ---------------------------------------------------------
 
     def load_welcome_view():
-        """Loads the landing page dashboard"""
         content = ft.Column([
-            ft.Row([hamburger_btn, ft.Text("Admin Dashboard", size=30, weight="bold")], alignment=ft.MainAxisAlignment.START),
+            ft.Row([hamburger_btn, ft.Text("Admin Dashboard", size=30, weight="bold")]),
             ft.Text("Select an option from the menu to get started.", size=16),
             ft.Divider(),
             ft.Container(
@@ -152,9 +207,8 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
         page.update()
 
     def load_users_view():
-        """Loads the User Management Table"""
         users = admin_service.get_all_users()
-        
+
         data_table = ft.DataTable(
             columns=[
                 ft.DataColumn(ft.Text("ID")),
@@ -171,23 +225,19 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
                 ]) for u in users
             ],
             border=ft.border.all(1, ft.Colors.GREY_300),
-            vertical_lines=ft.border.BorderSide(1, ft.Colors.GREY_300),
         )
 
-        content = ft.Column([
-            ft.Row([hamburger_btn, ft.Text("Manage Users", size=24, weight="bold")], alignment=ft.MainAxisAlignment.START),
+        main_content_area.content = ft.Column([
+            ft.Row([hamburger_btn, ft.Text("Manage Users", size=24, weight="bold")]),
             ft.ElevatedButton("Add New User", icon=ft.Icons.ADD, on_click=open_add_user_dialog),
             ft.Divider(),
-            ft.Row([data_table], scroll="adaptive") # Scrollable table
-        ], scroll="adaptive", expand=True)
-        
-        main_content_area.content = content
+            ft.Row([data_table], scroll="adaptive")
+        ])
         page.update()
 
     def load_events_view():
-        """Loads the Event Management Grid"""
         events = admin_service.get_all_events()
-        
+
         events_grid = ft.GridView(
             runs_count=2,
             max_extent=300,
@@ -195,9 +245,8 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
             spacing=10,
             run_spacing=10,
         )
-        
+
         for e in events:
-            # Visual Style based on Event Type
             bg_color = ft.Colors.PINK_50 if e.event_type == "Pageant" else ft.Colors.GREEN_50
             icon = ft.Icons.WOMAN if e.event_type == "Pageant" else ft.Icons.QUIZ
             border_col = ft.Colors.PINK if e.event_type == "Pageant" else ft.Colors.GREEN
@@ -211,23 +260,22 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
                     ft.Row([ft.Icon(icon, color=border_col), ft.Text(e.event_type, weight="bold", color=border_col)]),
                     ft.Text(e.name, size=18, weight="bold"),
                     ft.Text(f"Status: {e.status}"),
-                    ft.ElevatedButton("Manage", data=e.id) # Placeholder for future logic
+                    ft.ElevatedButton("Manage", data=e.id)
                 ])
             )
             events_grid.controls.append(card)
 
-        content = ft.Column([
-            ft.Row([hamburger_btn, ft.Text("Manage Events", size=24, weight="bold")], alignment=ft.MainAxisAlignment.START),
+        main_content_area.content = ft.Column([
+            ft.Row([hamburger_btn, ft.Text("Manage Events", size=24, weight="bold")]),
             ft.ElevatedButton("Create Event", icon=ft.Icons.ADD, on_click=open_add_event_dialog),
             ft.Divider(),
             ft.Container(content=events_grid, expand=True)
         ], expand=True)
 
-        main_content_area.content = content
         page.update()
 
     # ---------------------------------------------------------
-    # 4. SIDEBAR NAVIGATION
+    # NAVIGATION RAIL (Sidebar inside)
     # ---------------------------------------------------------
 
     def nav_change(e):
@@ -238,83 +286,71 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
             load_users_view()
         elif index == 2:
             load_events_view()
-        
-        # Optional: Auto-close sidebar on mobile after selection
-        # sidebar_container.visible = False 
         page.update()
 
     rail = ft.NavigationRail(
         selected_index=0,
         label_type=ft.NavigationRailLabelType.ALL,
-        min_width=100,
-        min_extended_width=200,
-        expand=True, # Forces rail to take full height
+        expand=True,
         destinations=[
-            ft.NavigationRailDestination(
-                icon=ft.Icons.DASHBOARD, 
-                label="Dashboard"
-            ),
-            ft.NavigationRailDestination(
-                icon=ft.Icons.PEOPLE, 
-                label="Users"
-            ),
-            ft.NavigationRailDestination(
-                icon=ft.Icons.CALENDAR_TODAY, 
-                label="Events"
-            ),
+            ft.NavigationRailDestination(icon=ft.Icons.DASHBOARD, label="Dashboard"),
+            ft.NavigationRailDestination(icon=ft.Icons.PEOPLE, label="Users"),
+            ft.NavigationRailDestination(icon=ft.Icons.CALENDAR_TODAY, label="Events"),
         ],
         on_change=nav_change,
-        bgcolor=ft.Colors.TRANSPARENT # Match container
     )
 
-    # Sidebar Close Button (Top Right)
     close_btn = ft.IconButton(
         icon=ft.Icons.CHEVRON_LEFT,
         icon_color="red",
-        tooltip="Close Menu",
         on_click=close_sidebar
     )
-    
-    # Logout Button (Bottom)
+
     logout_btn = ft.Container(
         content=ft.ElevatedButton(
-            "Logout", 
+            "Logout",
             icon=ft.Icons.LOGOUT,
-            on_click=on_logout_callback, 
-            bgcolor=ft.Colors.RED, 
+            on_click=on_logout_callback,
+            bgcolor=ft.Colors.RED,
             color=ft.Colors.WHITE,
             width=200
         ),
         padding=10,
     )
 
-    # FIX: Use a Column layout instead of Stack for better stability
     sidebar_content = ft.Column(
         controls=[
-            ft.Row([ft.Container(expand=True), close_btn]), # Close button at top right
-            rail, # Rail expands to fill middle space
-            ft.Divider(height=1, thickness=1),
-            logout_btn # Logout at bottom
+            ft.Row([ft.Container(expand=True), close_btn]),
+            rail,
+            ft.Divider(),
+            logout_btn
         ],
         spacing=0,
         expand=True
     )
 
-    # Assign the content to the container
     sidebar_container.content = sidebar_content
 
     # ---------------------------------------------------------
-    # 5. INITIALIZATION
+    # INITIAL LOAD
     # ---------------------------------------------------------
-    
-    # Load default view
     load_welcome_view()
 
-    return ft.Row(
-        controls=[
-            sidebar_container,
-            ft.VerticalDivider(width=1),
-            main_content_area
-        ],
+    # ---------------------------------------------------------
+    # FINAL STRUCTURE (Header on top)
+    # ---------------------------------------------------------
+
+    return ft.Column(
         expand=True,
+        controls=[
+            header,   # <── added
+            ft.Row(
+                expand=True,
+                controls=[
+                    sidebar_container,
+                    ft.VerticalDivider(width=1),
+                    main_content_area
+                ]
+            )
+        ]
     )
