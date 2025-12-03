@@ -1,5 +1,4 @@
 import flet as ft
-from services.admin_service import AdminService
 from services.pageant_service import PageantService
 from services.quiz_service import QuizService
 from core.database import SessionLocal
@@ -30,10 +29,11 @@ def AdminConfigView(page: ft.Page, event_id: int):
     # 2. PAGEANT SPECIFIC UI
     # ---------------------------------------------------------
     p_seg_name = ft.TextField(label="Segment Name (e.g., Swimwear)", width=280)
-    p_seg_weight = ft.TextField(label="Weight (0.1 to 1.0)", keyboard_type=ft.KeyboardType.NUMBER, width=280)
+    # Changed label to indicate % input
+    p_seg_weight = ft.TextField(label="Weight (%)", suffix_text="%", keyboard_type=ft.KeyboardType.NUMBER, width=280)
     
     p_crit_name = ft.TextField(label="Criteria Name (e.g., Poise)", width=280)
-    p_crit_weight = ft.TextField(label="Weight (0.1 to 1.0)", keyboard_type=ft.KeyboardType.NUMBER, width=280)
+    p_crit_weight = ft.TextField(label="Weight (%)", suffix_text="%", keyboard_type=ft.KeyboardType.NUMBER, width=280)
     
     selected_segment_id = None 
 
@@ -48,7 +48,10 @@ def AdminConfigView(page: ft.Page, event_id: int):
             ft.ElevatedButton("Add Segment", icon=ft.Icons.ADD, on_click=open_seg_dialog)
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN))
 
+        current_total_weight = 0.0
+
         for seg in segments:
+            current_total_weight += seg.percentage_weight
             criterias = db.query(Criteria).filter(Criteria.segment_id == seg.id).all()
             
             crit_list = ft.Column(spacing=5)
@@ -65,13 +68,14 @@ def AdminConfigView(page: ft.Page, event_id: int):
                     )
                 )
             
+            # FIX 1: Chip label must be a control (ft.Text), not a string
             card = ft.Card(
                 content=ft.Container(
                     padding=15,
                     content=ft.Column([
                         ft.Row([
                             ft.Text(f"{seg.name}", size=18, weight="bold"),
-                            ft.Chip(label=f"{int(seg.percentage_weight * 100)}% of Total"),
+                            ft.Chip(label=ft.Text(f"{int(seg.percentage_weight * 100)}% of Total")),
                             ft.IconButton(
                                 icon=ft.Icons.ADD_CIRCLE_OUTLINE, 
                                 tooltip="Add Criteria",
@@ -86,16 +90,32 @@ def AdminConfigView(page: ft.Page, event_id: int):
             )
             ui_column.controls.append(card)
         
+        # Total Warning
+        if current_total_weight > 1.0:
+            ui_column.controls.append(ft.Text(f"⚠️ Total Weight is {int(current_total_weight*100)}%. It should be 100%.", color="red"))
+        elif current_total_weight < 1.0:
+            ui_column.controls.append(ft.Text(f"ℹ️ Total Weight is {int(current_total_weight*100)}%. Add more segments.", color="blue"))
+        else:
+             ui_column.controls.append(ft.Text("✅ Total Weight is 100%. Config Complete.", color="green"))
+
         db.close()
         return ui_column
 
     def save_segment(e):
         try:
-            w = float(p_seg_weight.value)
+            # FIX 2: Treat input as whole number percentage (50 -> 0.50)
+            raw_val = float(p_seg_weight.value)
+            if raw_val > 1.0: 
+                w = raw_val / 100.0
+            else:
+                w = raw_val # Allow 0.5 if they insist, but UI encourages 50
+            
             success, msg = pageant_service.add_segment(event_id, p_seg_name.value, w, 1)
             if success:
-                page.open(ft.SnackBar(ft.Text("Segment Added!")))
+                page.open(ft.SnackBar(ft.Text("Segment Added!"), bgcolor="green"))
                 page.close(seg_dialog)
+                p_seg_name.value = ""
+                p_seg_weight.value = ""
                 refresh_ui()
             else:
                 page.open(ft.SnackBar(ft.Text(f"Error: {msg}"), bgcolor="red"))
@@ -104,11 +124,19 @@ def AdminConfigView(page: ft.Page, event_id: int):
 
     def save_criteria(e):
         try:
-            w = float(p_crit_weight.value)
+            # FIX 2: Treat input as whole number percentage (50 -> 0.50)
+            raw_val = float(p_crit_weight.value)
+            if raw_val > 1.0:
+                w = raw_val / 100.0
+            else:
+                w = raw_val
+                
             success, msg = pageant_service.add_criteria(selected_segment_id, p_crit_name.value, w)
             if success:
-                page.open(ft.SnackBar(ft.Text("Criteria Added!")))
+                page.open(ft.SnackBar(ft.Text("Criteria Added!"), bgcolor="green"))
                 page.close(crit_dialog)
+                p_crit_name.value = ""
+                p_crit_weight.value = ""
                 refresh_ui()
             else:
                 page.open(ft.SnackBar(ft.Text(f"Error: {msg}"), bgcolor="red"))
@@ -154,6 +182,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN))
 
         for r in rounds:
+            # FIX 1: Chip label must be a control (ft.Text)
             card = ft.Card(
                 content=ft.Container(
                     padding=15,
@@ -162,7 +191,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
                             ft.Text(f"{r.name}", size=18, weight="bold"),
                             ft.Text(f"{r.total_questions} Questions"),
                         ]),
-                        ft.Chip(label=f"{int(r.points_per_question)} pts/question", bgcolor=ft.Colors.GREEN_100),
+                        ft.Chip(label=ft.Text(f"{int(r.points_per_question)} pts/question"), bgcolor=ft.Colors.GREEN_100),
                     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
                 )
             )
@@ -177,8 +206,9 @@ def AdminConfigView(page: ft.Page, event_id: int):
             qs = int(q_total_qs.value)
             success, msg = quiz_service.add_round(event_id, q_round_name.value, pts, qs, 1)
             if success:
-                page.open(ft.SnackBar(ft.Text("Round Added!")))
+                page.open(ft.SnackBar(ft.Text("Round Added!"), bgcolor="green"))
                 page.close(round_dialog)
+                q_round_name.value = "" # Clear input
                 refresh_ui()
             else:
                 page.open(ft.SnackBar(ft.Text(f"Error: {msg}"), bgcolor="red"))
