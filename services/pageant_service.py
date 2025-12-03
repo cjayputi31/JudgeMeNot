@@ -48,6 +48,39 @@ class PageantService:
         finally:
             db.close()
 
+    def update_segment(self, segment_id, name, weight):
+        """Updates an existing segment"""
+        db: Session = SessionLocal()
+        try:
+            seg = db.query(Segment).get(segment_id)
+            if seg:
+                seg.name = name
+                seg.percentage_weight = weight
+                db.commit()
+                return True, "Segment updated."
+            return False, "Segment not found."
+        except Exception as e:
+            return False, str(e)
+        finally:
+            db.close()
+
+    def update_criteria(self, criteria_id, name, weight):
+        """Updates an existing criteria"""
+        db: Session = SessionLocal()
+        try:
+            crit = db.query(Criteria).get(criteria_id)
+            if crit:
+                crit.name = name
+                crit.weight = weight
+                db.commit()
+                return True, "Criteria updated."
+            return False, "Criteria not found."
+        except Exception as e:
+            return False, str(e)
+        finally:
+            db.close()
+
+
     def submit_score(self, judge_id, contestant_id, criteria_id, score_value):
         """
         Saves a single score (e.g., Judge 1 gives 9.5 for Poise).

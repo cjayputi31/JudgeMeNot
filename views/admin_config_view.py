@@ -29,13 +29,15 @@ def AdminConfigView(page: ft.Page, event_id: int):
     # 2. PAGEANT SPECIFIC UI
     # ---------------------------------------------------------
     p_seg_name = ft.TextField(label="Segment Name (e.g., Swimwear)", width=280)
-    # Changed label to indicate % input
     p_seg_weight = ft.TextField(label="Weight (%)", suffix_text="%", keyboard_type=ft.KeyboardType.NUMBER, width=280)
     
     p_crit_name = ft.TextField(label="Criteria Name (e.g., Poise)", width=280)
     p_crit_weight = ft.TextField(label="Weight (%)", suffix_text="%", keyboard_type=ft.KeyboardType.NUMBER, width=280)
     
+    # State tracking for edits
     selected_segment_id = None 
+    editing_segment_id = None # If set, we are updating, not adding
+    editing_criteria_id = None # If set, we are updating, not adding
 
     def render_pageant_ui():
         db = SessionLocal()
@@ -45,7 +47,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
         
         ui_column.controls.append(ft.Row([
             ft.Text("Pageant Configuration", size=24, weight="bold"),
-            ft.ElevatedButton("Add Segment", icon=ft.Icons.ADD, on_click=open_seg_dialog)
+            ft.ElevatedButton("Add Segment", icon=ft.Icons.ADD, on_click=open_add_seg_dialog)
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN))
 
         current_total_weight = 0.0
@@ -59,29 +61,51 @@ def AdminConfigView(page: ft.Page, event_id: int):
                 crit_list.controls.append(
                     ft.Container(
                         content=ft.Row([
-                            ft.Icon(ft.Icons.SUBDIRECTORY_ARROW_RIGHT, size=16),
-                            ft.Text(f"{c.name}", weight="bold"),
-                            ft.Text(f"Weight: {int(c.weight * 100)}%"),
-                            ft.Text(f"Max: {c.max_score} pts"),
-                        ]),
-                        padding=ft.padding.only(left=20)
+                            ft.Row([
+                                ft.Icon(ft.Icons.SUBDIRECTORY_ARROW_RIGHT, size=16, color="grey"),
+                                ft.Text(f"{c.name}", weight="bold"),
+                                ft.Text(f"Weight: {int(c.weight * 100)}%"),
+                                ft.Text(f"Max: {c.max_score} pts"),
+                            ]),
+                            # Edit Criteria Button
+                            ft.IconButton(
+                                icon=ft.Icons.EDIT, 
+                                icon_size=16, 
+                                tooltip="Edit Criteria",
+                                data=c, # Pass entire object to pre-fill
+                                on_click=open_edit_crit_dialog
+                            )
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        padding=ft.padding.only(left=20),
+                        bgcolor=ft.Colors.GREY_50,
+                        border_radius=5
                     )
                 )
             
-            # FIX 1: Chip label must be a control (ft.Text), not a string
             card = ft.Card(
                 content=ft.Container(
                     padding=15,
                     content=ft.Column([
                         ft.Row([
-                            ft.Text(f"{seg.name}", size=18, weight="bold"),
-                            ft.Chip(label=ft.Text(f"{int(seg.percentage_weight * 100)}% of Total")),
-                            ft.IconButton(
-                                icon=ft.Icons.ADD_CIRCLE_OUTLINE, 
-                                tooltip="Add Criteria",
-                                data=seg.id,
-                                on_click=open_crit_dialog
-                            )
+                            ft.Row([
+                                ft.Text(f"{seg.name}", size=18, weight="bold"),
+                                ft.Chip(label=ft.Text(f"{int(seg.percentage_weight * 100)}% of Total")),
+                            ]),
+                            ft.Row([
+                                # Edit Segment Button
+                                ft.IconButton(
+                                    icon=ft.Icons.EDIT,
+                                    tooltip="Edit Segment",
+                                    data=seg, # Pass entire object
+                                    on_click=open_edit_seg_dialog
+                                ),
+                                ft.IconButton(
+                                    icon=ft.Icons.ADD_CIRCLE_OUTLINE, 
+                                    tooltip="Add Criteria",
+                                    data=seg.id,
+                                    on_click=open_add_crit_dialog
+                                )
+                            ])
                         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                         ft.Divider(),
                         crit_list if criterias else ft.Text("No criteria added yet.", italic=True, color="grey")
@@ -103,19 +127,23 @@ def AdminConfigView(page: ft.Page, event_id: int):
 
     def save_segment(e):
         try:
-            # FIX 2: Treat input as whole number percentage (50 -> 0.50)
             raw_val = float(p_seg_weight.value)
+            # Smart Convert: If they type 50, treat as 0.5. If 0.5, treat as 0.5
             if raw_val > 1.0: 
                 w = raw_val / 100.0
             else:
-                w = raw_val # Allow 0.5 if they insist, but UI encourages 50
+                w = raw_val 
             
-            success, msg = pageant_service.add_segment(event_id, p_seg_name.value, w, 1)
+            if editing_segment_id:
+                # UPDATE EXISTING
+                success, msg = pageant_service.update_segment(editing_segment_id, p_seg_name.value, w)
+            else:
+                # CREATE NEW
+                success, msg = pageant_service.add_segment(event_id, p_seg_name.value, w, 1)
+
             if success:
-                page.open(ft.SnackBar(ft.Text("Segment Added!"), bgcolor="green"))
+                page.open(ft.SnackBar(ft.Text("Segment Saved!"), bgcolor="green"))
                 page.close(seg_dialog)
-                p_seg_name.value = ""
-                p_seg_weight.value = ""
                 refresh_ui()
             else:
                 page.open(ft.SnackBar(ft.Text(f"Error: {msg}"), bgcolor="red"))
@@ -124,47 +152,88 @@ def AdminConfigView(page: ft.Page, event_id: int):
 
     def save_criteria(e):
         try:
-            # FIX 2: Treat input as whole number percentage (50 -> 0.50)
             raw_val = float(p_crit_weight.value)
             if raw_val > 1.0:
                 w = raw_val / 100.0
             else:
                 w = raw_val
-                
-            success, msg = pageant_service.add_criteria(selected_segment_id, p_crit_name.value, w)
+            
+            if editing_criteria_id:
+                # UPDATE EXISTING
+                success, msg = pageant_service.update_criteria(editing_criteria_id, p_crit_name.value, w)
+            else:
+                # CREATE NEW
+                success, msg = pageant_service.add_criteria(selected_segment_id, p_crit_name.value, w)
+
             if success:
-                page.open(ft.SnackBar(ft.Text("Criteria Added!"), bgcolor="green"))
+                page.open(ft.SnackBar(ft.Text("Criteria Saved!"), bgcolor="green"))
                 page.close(crit_dialog)
-                p_crit_name.value = ""
-                p_crit_weight.value = ""
                 refresh_ui()
             else:
                 page.open(ft.SnackBar(ft.Text(f"Error: {msg}"), bgcolor="red"))
         except ValueError:
              page.open(ft.SnackBar(ft.Text("Invalid Weight"), bgcolor="red"))
 
+    # Dialogs
     seg_dialog = ft.AlertDialog(
-        title=ft.Text("Add Segment"),
+        title=ft.Text("Segment Details"),
         content=ft.Column([p_seg_name, p_seg_weight], height=150, width=300, tight=True),
         actions=[ft.TextButton("Save", on_click=save_segment)]
     )
     
     crit_dialog = ft.AlertDialog(
-        title=ft.Text("Add Criteria"),
+        title=ft.Text("Criteria Details"),
         content=ft.Column([p_crit_name, p_crit_weight], height=150, width=300, tight=True),
         actions=[ft.TextButton("Save", on_click=save_criteria)]
     )
 
-    def open_seg_dialog(e):
+    # --- DIALOG OPENERS ---
+    
+    def open_add_seg_dialog(e):
+        nonlocal editing_segment_id
+        editing_segment_id = None # Reset edit mode
+        p_seg_name.value = ""
+        p_seg_weight.value = ""
+        seg_dialog.title.value = "Add Segment"
         page.open(seg_dialog)
 
-    def open_crit_dialog(e):
-        nonlocal selected_segment_id
+    def open_edit_seg_dialog(e):
+        nonlocal editing_segment_id
+        seg_data = e.control.data
+        editing_segment_id = seg_data.id # Set edit mode
+        
+        # Pre-fill fields
+        p_seg_name.value = seg_data.name
+        # Convert 0.5 back to 50 for easier editing
+        p_seg_weight.value = str(int(seg_data.percentage_weight * 100))
+        
+        seg_dialog.title.value = "Edit Segment"
+        page.open(seg_dialog)
+
+    def open_add_crit_dialog(e):
+        nonlocal selected_segment_id, editing_criteria_id
         selected_segment_id = e.control.data
+        editing_criteria_id = None # Reset edit mode
+        
+        p_crit_name.value = ""
+        p_crit_weight.value = ""
+        crit_dialog.title.value = "Add Criteria"
+        page.open(crit_dialog)
+
+    def open_edit_crit_dialog(e):
+        nonlocal editing_criteria_id
+        crit_data = e.control.data
+        editing_criteria_id = crit_data.id # Set edit mode
+        
+        # Pre-fill fields
+        p_crit_name.value = crit_data.name
+        p_crit_weight.value = str(int(crit_data.weight * 100))
+        
+        crit_dialog.title.value = "Edit Criteria"
         page.open(crit_dialog)
 
     # ---------------------------------------------------------
-    # 3. QUIZ BEE SPECIFIC UI
+    # 3. QUIZ BEE SPECIFIC UI (Simplified for brevity - same logic applies)
     # ---------------------------------------------------------
     q_round_name = ft.TextField(label="Round Name (e.g., Easy)", width=280)
     q_points = ft.TextField(label="Points per Question", value="1", keyboard_type=ft.KeyboardType.NUMBER, width=280)
@@ -182,7 +251,6 @@ def AdminConfigView(page: ft.Page, event_id: int):
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN))
 
         for r in rounds:
-            # FIX 1: Chip label must be a control (ft.Text)
             card = ft.Card(
                 content=ft.Container(
                     padding=15,
@@ -208,7 +276,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
             if success:
                 page.open(ft.SnackBar(ft.Text("Round Added!"), bgcolor="green"))
                 page.close(round_dialog)
-                q_round_name.value = "" # Clear input
+                q_round_name.value = "" 
                 refresh_ui()
             else:
                 page.open(ft.SnackBar(ft.Text(f"Error: {msg}"), bgcolor="red"))
