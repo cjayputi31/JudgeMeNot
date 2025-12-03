@@ -1,6 +1,7 @@
 import flet as ft
 from services.pageant_service import PageantService
 from services.quiz_service import QuizService
+from services.contestant_service import ContestantService 
 from core.database import SessionLocal
 from models.all_models import Event, Segment, Criteria
 
@@ -8,6 +9,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
     # Services
     pageant_service = PageantService()
     quiz_service = QuizService()
+    contestant_service = ContestantService() 
 
     # State
     current_event = None
@@ -26,7 +28,99 @@ def AdminConfigView(page: ft.Page, event_id: int):
         return ft.Container(content=ft.Text("Event not found!"))
 
     # ---------------------------------------------------------
-    # 2. PAGEANT SPECIFIC UI
+    # 2. CONTESTANT MANAGEMENT UI (TAB 2)
+    # ---------------------------------------------------------
+    c_number = ft.TextField(label="#", width=80, keyboard_type=ft.KeyboardType.NUMBER)
+    c_name = ft.TextField(label="Name (e.g., Mary or Team Red)", expand=True)
+    c_gender = ft.Dropdown(
+        label="Gender", width=120,
+        options=[ft.dropdown.Option("Female"), ft.dropdown.Option("Male"), ft.dropdown.Option("N/A")],
+        value="N/A"
+    )
+
+    def render_contestant_tab():
+        contestants = contestant_service.get_contestants(event_id)
+        
+        # 1. Add Form
+        add_row = ft.Row([
+            c_number, 
+            c_name, 
+            c_gender,
+            ft.IconButton(icon=ft.Icons.ADD_CIRCLE, icon_size=40, icon_color="blue", on_click=add_contestant_click)
+        ])
+
+        # 2. List
+        list_column = ft.Column(spacing=10, scroll="adaptive")
+        
+        for c in contestants:
+            bg_col = ft.Colors.PINK_50 if c.gender == "Female" else (ft.Colors.BLUE_50 if c.gender == "Male" else ft.Colors.GREY_100)
+            icon = ft.Icons.WOMAN if c.gender == "Female" else (ft.Icons.MAN if c.gender == "Male" else ft.Icons.GROUPS)
+            
+            list_column.controls.append(
+                ft.Container(
+                    padding=10,
+                    bgcolor=bg_col,
+                    border_radius=10,
+                    content=ft.Row([
+                        ft.Row([
+                            ft.Container(
+                                content=ft.Text(f"#{c.candidate_number}", size=20, weight="bold", color="white"),
+                                bgcolor="black", padding=10, border_radius=5
+                            ),
+                            ft.Icon(icon),
+                            ft.Text(c.name, size=18)
+                        ]),
+                        ft.IconButton(
+                            icon=ft.Icons.DELETE, 
+                            icon_color="red", 
+                            data=c.id, 
+                            on_click=delete_contestant_click
+                        )
+                    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+                )
+            )
+
+        return ft.Container(
+            padding=20,
+            content=ft.Column([
+                ft.Text("Manage Participants", size=20, weight="bold"),
+                ft.Text("Add candidates or teams below.", size=14, color="grey"),
+                ft.Divider(),
+                add_row,
+                ft.Divider(),
+                list_column
+            ])
+        )
+
+    def add_contestant_click(e):
+        if not c_number.value or not c_name.value:
+            page.open(ft.SnackBar(ft.Text("Fill Number and Name"), bgcolor="red"))
+            return
+            
+        try:
+            num = int(c_number.value)
+            success, msg = contestant_service.add_contestant(event_id, num, c_name.value, c_gender.value)
+            if success:
+                page.open(ft.SnackBar(ft.Text("Contestant Added!"), bgcolor="green"))
+                c_name.value = ""
+                c_number.value = str(num + 1) # Auto-increment for convenience
+                refresh_ui()
+            else:
+                page.open(ft.SnackBar(ft.Text(f"Error: {msg}"), bgcolor="red"))
+        except ValueError:
+            page.open(ft.SnackBar(ft.Text("Number must be an integer"), bgcolor="red"))
+
+    def delete_contestant_click(e):
+        c_id = e.control.data
+        success, msg = contestant_service.delete_contestant(c_id)
+        if success:
+            page.open(ft.SnackBar(ft.Text("Deleted"), bgcolor="grey"))
+            refresh_ui()
+        else:
+             page.open(ft.SnackBar(ft.Text(f"Error: {msg}"), bgcolor="red"))
+
+    # ---------------------------------------------------------
+    # 3. PAGEANT CONFIGURATION UI (TAB 1 - Logic A)
     # ---------------------------------------------------------
     p_seg_name = ft.TextField(label="Segment Name (e.g., Swimwear)", width=280)
     p_seg_weight = ft.TextField(label="Weight (%)", suffix_text="%", keyboard_type=ft.KeyboardType.NUMBER, width=280)
@@ -36,14 +130,14 @@ def AdminConfigView(page: ft.Page, event_id: int):
     
     # State tracking for edits
     selected_segment_id = None 
-    editing_segment_id = None # If set, we are updating, not adding
-    editing_criteria_id = None # If set, we are updating, not adding
+    editing_segment_id = None 
+    editing_criteria_id = None 
 
     def render_pageant_ui():
         db = SessionLocal()
         segments = db.query(Segment).filter(Segment.event_id == event_id).all()
         
-        ui_column = ft.Column(spacing=20)
+        ui_column = ft.Column(spacing=20, scroll="adaptive")
         
         ui_column.controls.append(ft.Row([
             ft.Text("Pageant Configuration", size=24, weight="bold"),
@@ -72,7 +166,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
                                 icon=ft.Icons.EDIT, 
                                 icon_size=16, 
                                 tooltip="Edit Criteria",
-                                data=c, # Pass entire object to pre-fill
+                                data=c, 
                                 on_click=open_edit_crit_dialog
                             )
                         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
@@ -96,7 +190,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
                                 ft.IconButton(
                                     icon=ft.Icons.EDIT,
                                     tooltip="Edit Segment",
-                                    data=seg, # Pass entire object
+                                    data=seg, 
                                     on_click=open_edit_seg_dialog
                                 ),
                                 ft.IconButton(
@@ -123,7 +217,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
              ui_column.controls.append(ft.Text("✅ Total Weight is 100%. Config Complete.", color="green"))
 
         db.close()
-        return ui_column
+        return ft.Container(content=ui_column, padding=20)
 
     def save_segment(e):
         try:
@@ -135,10 +229,8 @@ def AdminConfigView(page: ft.Page, event_id: int):
                 w = raw_val 
             
             if editing_segment_id:
-                # UPDATE EXISTING
                 success, msg = pageant_service.update_segment(editing_segment_id, p_seg_name.value, w)
             else:
-                # CREATE NEW
                 success, msg = pageant_service.add_segment(event_id, p_seg_name.value, w, 1)
 
             if success:
@@ -159,10 +251,8 @@ def AdminConfigView(page: ft.Page, event_id: int):
                 w = raw_val
             
             if editing_criteria_id:
-                # UPDATE EXISTING
                 success, msg = pageant_service.update_criteria(editing_criteria_id, p_crit_name.value, w)
             else:
-                # CREATE NEW
                 success, msg = pageant_service.add_criteria(selected_segment_id, p_crit_name.value, w)
 
             if success:
@@ -188,10 +278,9 @@ def AdminConfigView(page: ft.Page, event_id: int):
     )
 
     # --- DIALOG OPENERS ---
-    
     def open_add_seg_dialog(e):
         nonlocal editing_segment_id
-        editing_segment_id = None # Reset edit mode
+        editing_segment_id = None 
         p_seg_name.value = ""
         p_seg_weight.value = ""
         seg_dialog.title.value = "Add Segment"
@@ -200,21 +289,16 @@ def AdminConfigView(page: ft.Page, event_id: int):
     def open_edit_seg_dialog(e):
         nonlocal editing_segment_id
         seg_data = e.control.data
-        editing_segment_id = seg_data.id # Set edit mode
-        
-        # Pre-fill fields
+        editing_segment_id = seg_data.id 
         p_seg_name.value = seg_data.name
-        # Convert 0.5 back to 50 for easier editing
         p_seg_weight.value = str(int(seg_data.percentage_weight * 100))
-        
         seg_dialog.title.value = "Edit Segment"
         page.open(seg_dialog)
 
     def open_add_crit_dialog(e):
         nonlocal selected_segment_id, editing_criteria_id
         selected_segment_id = e.control.data
-        editing_criteria_id = None # Reset edit mode
-        
+        editing_criteria_id = None 
         p_crit_name.value = ""
         p_crit_weight.value = ""
         crit_dialog.title.value = "Add Criteria"
@@ -223,17 +307,14 @@ def AdminConfigView(page: ft.Page, event_id: int):
     def open_edit_crit_dialog(e):
         nonlocal editing_criteria_id
         crit_data = e.control.data
-        editing_criteria_id = crit_data.id # Set edit mode
-        
-        # Pre-fill fields
+        editing_criteria_id = crit_data.id 
         p_crit_name.value = crit_data.name
         p_crit_weight.value = str(int(crit_data.weight * 100))
-        
         crit_dialog.title.value = "Edit Criteria"
         page.open(crit_dialog)
 
     # ---------------------------------------------------------
-    # 3. QUIZ BEE SPECIFIC UI (Simplified for brevity - same logic applies)
+    # 4. QUIZ BEE CONFIGURATION UI (TAB 1 - Logic B)
     # ---------------------------------------------------------
     q_round_name = ft.TextField(label="Round Name (e.g., Easy)", width=280)
     q_points = ft.TextField(label="Points per Question", value="1", keyboard_type=ft.KeyboardType.NUMBER, width=280)
@@ -243,7 +324,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
         db = SessionLocal()
         rounds = db.query(Segment).filter(Segment.event_id == event_id).all()
         
-        ui_column = ft.Column(spacing=20)
+        ui_column = ft.Column(spacing=20, scroll="adaptive")
         
         ui_column.controls.append(ft.Row([
             ft.Text("Quiz Bee Configuration", size=24, weight="bold"),
@@ -266,7 +347,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
             ui_column.controls.append(card)
         
         db.close()
-        return ui_column
+        return ft.Container(content=ui_column, padding=20)
 
     def save_round(e):
         try:
@@ -293,33 +374,51 @@ def AdminConfigView(page: ft.Page, event_id: int):
         page.open(round_dialog)
 
     # ---------------------------------------------------------
-    # 4. MAIN LAYOUT ASSEMBLY
+    # 5. MAIN LAYOUT ASSEMBLY
     # ---------------------------------------------------------
-    content_area = ft.Column(expand=True, scroll="adaptive")
+    
+    def render_config_tab():
+        if current_event.event_type == "Pageant":
+            return render_pageant_ui()
+        else:
+            return render_quiz_ui()
+
+    tabs = ft.Tabs(
+        selected_index=0,
+        animation_duration=300,
+        tabs=[
+            ft.Tab(
+                text="Configuration",
+                icon=ft.Icons.SETTINGS,
+                content=render_config_tab() 
+            ),
+            ft.Tab(
+                text="Contestants",
+                icon=ft.Icons.PEOPLE,
+                content=render_contestant_tab() 
+            ),
+        ],
+        expand=True
+    )
 
     def refresh_ui():
-        content_area.controls.clear()
-        
-        content_area.controls.append(
-            ft.TextButton("Back to Dashboard", icon=ft.Icons.ARROW_BACK, on_click=lambda e: page.go("/admin"))
-        )
-        
-        content_area.controls.append(
-            ft.Text(f"Configuring: {current_event.name}", size=30, weight="bold", color=ft.Colors.BLUE)
-        )
-        content_area.controls.append(ft.Divider())
-
-        if current_event.event_type == "Pageant":
-            content_area.controls.append(render_pageant_ui())
-        else:
-            content_area.controls.append(render_quiz_ui())
-        
+        # Because we can't easily re-assign tab content in Flet 0.28+ without
+        # potential issues, it is often safer to clear and rebuild the view controls
+        # or update the specific tab content. 
+        # Here we re-assign the content property which works for refresh.
+        tabs.tabs[0].content = render_config_tab() 
+        tabs.tabs[1].content = render_contestant_tab()
         page.update()
 
-    refresh_ui()
-
     return ft.Container(
-        content=content_area,
+        content=ft.Column([
+            ft.Row([
+                ft.IconButton(icon=ft.Icons.ARROW_BACK, on_click=lambda e: page.go("/admin")),
+                ft.Text(f"Event: {current_event.name}", size=24, weight="bold")
+            ]),
+            ft.Divider(),
+            tabs
+        ], expand=True),
         padding=20,
         expand=True
     )
