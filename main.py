@@ -14,6 +14,7 @@ def main(page: ft.Page):
     # These properties must be set on the 'page.window' object
     page.window.min_width = 900
     page.window.min_height = 675
+    page.update()
     
     # Optional: Set a nice starting size
     page.window.width = 1280
