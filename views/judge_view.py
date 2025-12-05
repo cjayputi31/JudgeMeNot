@@ -16,11 +16,49 @@ def JudgeView(page: ft.Page, on_logout_callback):
     current_event = None
     selected_segment = None
     
-    # Registry to store references for Global Submit
+    # Polling State
+    is_polling = False
+    
+    # Registry
     cards_registry = {}
 
     # Layout Containers
     main_container = ft.Container(expand=True, padding=10)
+
+    # ---------------------------------------------------------
+    # 0. POLLING LOGIC (RESTORED)
+    # ---------------------------------------------------------
+    def start_polling():
+        nonlocal is_polling
+        if is_polling: return 
+        is_polling = True
+        threading.Thread(target=poll_active_segment, daemon=True).start()
+
+    def stop_polling():
+        nonlocal is_polling
+        is_polling = False
+
+    def poll_active_segment():
+        while is_polling and current_event:
+            try:
+                # 1. Check DB
+                active_seg_db = pageant_service.get_active_segment(current_event.id)
+                db_id = active_seg_db.id if active_seg_db else None
+                
+                # 2. Check Screen
+                current_id = selected_segment['segment'].id if selected_segment else None
+                
+                # 3. Compare
+                if db_id != current_id:
+                    # If DB is None (Deactivated) != Screen (Active), this triggers.
+                    # If DB is New ID != Screen Old ID, this triggers.
+                    print(f"🔄 Auto-Refresh: {current_id} -> {db_id}")
+                    enter_scoring_dashboard(current_event)
+                
+            except Exception as e:
+                print(f"Polling Error: {e}")
+            
+            time.sleep(3)
 
     # ---------------------------------------------------------
     # 1. HEADER & GLOBAL SUBMIT LOGIC
@@ -35,7 +73,6 @@ def JudgeView(page: ft.Page, on_logout_callback):
             
             card_is_complete = True
             
-            # Visual Feedback
             btn.content = ft.ProgressRing(width=16, height=16, stroke_width=2, color="white")
             btn.update()
 
@@ -118,6 +155,8 @@ def JudgeView(page: ft.Page, on_logout_callback):
     # 2. SELECT EVENT
     # ---------------------------------------------------------
     def load_event_selector():
+        stop_polling() # Stop background task when leaving dashboard
+        
         events = pageant_service.get_active_pageants()
         
         grid = ft.GridView(expand=True, max_extent=300, spacing=20, run_spacing=20)
@@ -154,35 +193,36 @@ def JudgeView(page: ft.Page, on_logout_callback):
         nonlocal current_event, selected_segment
         current_event = event
         
-        # CHANGED: Instead of getting structure[0], get the ACTIVE segment
+        # 1. Fetch ACTIVE
         active_seg = pageant_service.get_active_segment(current_event.id)
         
         if not active_seg:
-            # Show "Waiting Room" if nothing is active
+            selected_segment = None
             show_waiting_room()
+            start_polling() # Keep polling until admin activates something
             return
 
-        # We still need the full structure to map criteria, but we filter for the active one
+        # 2. Load Data
         structure = pageant_service.get_event_structure(current_event.id)
-        
-        # Find the structure dict corresponding to the active segment
         target_struct = next((s for s in structure if s['segment'].id == active_seg.id), None)
         
         if target_struct:
             selected_segment = target_struct
-            render_dashboard(target_struct) # Pass single segment structure
+            render_dashboard(target_struct)
+            start_polling() # Keep polling for changes/deactivation
         else:
-            page.open(ft.SnackBar(ft.Text("Error loading active segment data"), bgcolor="red"))
+            page.open(ft.SnackBar(ft.Text("Error loading data"), bgcolor="red"))
 
     def show_waiting_room():
         main_container.content = ft.Column([
             ft.Row([ft.IconButton(icon=ft.Icons.ARROW_BACK, on_click=lambda e: load_event_selector())]),
             ft.Container(
                 content=ft.Column([
-                    ft.ProgressRing(),
-                    ft.Text("Waiting for Admin...", size=20, weight="bold"),
-                    ft.Text("No segment is currently active.", color="grey"),
-                    ft.ElevatedButton("Refresh", icon=ft.Icons.REFRESH, on_click=lambda e: enter_scoring_dashboard(current_event))
+                    ft.ProgressRing(width=50, height=50, stroke_width=4),
+                    ft.Container(height=20),
+                    ft.Text("Waiting for Admin...", size=24, weight="bold"),
+                    ft.Text("No segment is currently active.", color="grey", size=16),
+                    ft.Text("The screen will refresh automatically.", italic=True, color="blue"),
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                 alignment=ft.alignment.center,
                 expand=True
@@ -191,18 +231,11 @@ def JudgeView(page: ft.Page, on_logout_callback):
         page.update()
 
     def render_dashboard(structure_item):
-        # REMOVED: Segment Dropdown (Judge cannot choose anymore)
-        
-        # Display Current Segment Name
         segment_title = ft.Text(
             f"Segment: {structure_item['segment'].name}", 
             size=20, weight="bold", color=ft.Colors.BLUE_800
         )
 
-        # ... (Gender Selector and Grid Logic remains mostly the same) ...
-        # ... (However, 'change_segment' function is deleted as it's no longer needed) ...
-
-        # 2. Gender Switcher
         gender_selector = ft.SegmentedButton(
             selected={ "0" }, 
             segments=[
@@ -227,11 +260,7 @@ def JudgeView(page: ft.Page, on_logout_callback):
                     res.append(create_scoring_card(c, scores, set_fixed_width=is_flow_layout))
                 return res
 
-            # --- VIEW A: SPLIT (Simultaneous) ---
             if tab_index == 0: 
-                # FIX: Changed horizontal_alignment to STRETCH so cards fill the width
-                # This ensures the responsive image (aspect ratio) grows as the column grows
-                
                 header_male = ft.Container(content=ft.Text("Male Candidates", weight="bold", color=ft.Colors.BLUE), bgcolor=ft.Colors.BLUE_50, padding=10, border_radius=5, alignment=ft.alignment.center, width=float("inf"))
                 male_cards = get_cards("Male", False)
                 list_male = ft.Column(controls=male_cards, expand=True, scroll="hidden", spacing=15, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
@@ -246,7 +275,6 @@ def JudgeView(page: ft.Page, on_logout_callback):
                     ft.Column([header_female, list_female], expand=True)
                 ], expand=True)
 
-            # --- VIEW B: FLOW (Sequential) ---
             else: 
                 target = "Female" if tab_index == 1 else "Male"
                 cards = get_cards(target, True)
@@ -255,7 +283,7 @@ def JudgeView(page: ft.Page, on_logout_callback):
                     content_area.content = ft.Column(
                         [
                             ft.Icon(ft.Icons.SEARCH_OFF, size=50, color="grey"),
-                            ft.Text("No candidates found in this category.", italic=True, size=16, color="grey")
+                            ft.Text("No candidates found.", italic=True, size=16, color="grey")
                         ], 
                         alignment=ft.MainAxisAlignment.CENTER, 
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -284,7 +312,7 @@ def JudgeView(page: ft.Page, on_logout_callback):
             
             inputs_column = ft.Column(spacing=5)
             local_inputs = {} 
-            current_criteria = selected_segment['criteria']
+            current_criteria = structure_item['criteria']
 
             def on_input_change(e):
                 btn = cards_registry[contestant.id]['btn']
@@ -366,7 +394,8 @@ def JudgeView(page: ft.Page, on_logout_callback):
                         btn.bgcolor = ft.Colors.BLUE
                         btn.content = ft.Text("Save Score", color="white")
                         btn.disabled = False
-                        page.update()
+                        try: page.update()
+                        except: pass
                 threading.Thread(target=revert).start()
 
             save_btn = ft.ElevatedButton(
@@ -392,7 +421,7 @@ def JudgeView(page: ft.Page, on_logout_callback):
                 shadow=ft.BoxShadow(blur_radius=4, color=ft.Colors.GREY_300),
                 content=ft.Column([
                     ft.Container(
-                        aspect_ratio=16/9, # Responsive 16:9 ratio
+                        aspect_ratio=16/9, 
                         width=float("inf"), 
                         bgcolor=ft.Colors.GREY_300,
                         alignment=ft.alignment.center,
@@ -419,27 +448,19 @@ def JudgeView(page: ft.Page, on_logout_callback):
             )
 
         # 5. ASSEMBLY
-        def change_segment(e, struct):
-            nonlocal selected_segment
-            idx = int(e.control.value)
-            selected_segment = struct[idx]
-            rebuild_view(int(list(gender_selector.selected)[0]))
-
         rebuild_view(0)
 
         # Top Control Bar (Unified Row)
-        # ... (Inside main_container.content assembly) ...
         top_bar = ft.Container(
             padding=10,
             content=ft.Row([
                 ft.Row([
                     ft.IconButton(icon=ft.Icons.ARROW_BACK, on_click=lambda e: load_event_selector()),
-                    segment_title, # Static Text instead of Dropdown
+                    segment_title,
                 ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 
                 ft.Row([
-                    ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Check Updates", on_click=lambda e: enter_scoring_dashboard(current_event)),
-                    gender_selector
+                    gender_selector 
                 ])
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN) 
         )
