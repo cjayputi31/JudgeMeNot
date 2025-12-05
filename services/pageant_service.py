@@ -4,10 +4,6 @@ from core.database import SessionLocal
 from models.all_models import Segment, Criteria, Score, Contestant, Event
 
 class PageantService:
-    # ... [Keep existing add_segment, update_segment, etc.] ...
-    # ... [Paste your previous add/update logic here if you haven't saved it yet] ...
-    # For brevity, I am adding the NEW methods below. Ensure you keep the old ones!
-
     def add_segment(self, event_id, name, weight, order):
         db = SessionLocal()
         try:
@@ -36,7 +32,8 @@ class PageantService:
         finally:
             db.close()
 
-    def add_criteria(self, segment_id, name, weight, max_score=10):
+    # --- CHANGED: Default max_score to 100 ---
+    def add_criteria(self, segment_id, name, weight, max_score=100):
         db = SessionLocal()
         try:
             new_crit = Criteria(segment_id=segment_id, name=name, weight=weight, max_score=max_score)
@@ -48,6 +45,7 @@ class PageantService:
         finally:
             db.close()
 
+    # --- CHANGED: Force max_score to 100 on update ---
     def update_criteria(self, criteria_id, name, weight):
         db = SessionLocal()
         try:
@@ -55,6 +53,7 @@ class PageantService:
             if crit:
                 crit.name = name
                 crit.weight = weight
+                crit.max_score = 100 # Auto-fix existing criteria to 100
                 db.commit()
                 return True, "Updated."
             return False, "Not found."
@@ -95,8 +94,6 @@ class PageantService:
         finally:
             db.close()
 
-    # --- NEW HELPER METHODS FOR JUDGE VIEW ---
-
     def get_active_pageants(self):
         """Returns all events of type 'Pageant'"""
         db = SessionLocal()
@@ -108,7 +105,6 @@ class PageantService:
     def get_event_structure(self, event_id):
         """
         Returns a nested dictionary of Segments -> Criteria
-        Used to build the dynamic form.
         """
         db = SessionLocal()
         structure = []
@@ -127,7 +123,6 @@ class PageantService:
     def get_judge_scores(self, judge_id, contestant_id):
         """
         Returns a dictionary {criteria_id: score_value}
-        Used to pre-fill the form if the judge edits a score.
         """
         db = SessionLocal()
         scores_map = {}
