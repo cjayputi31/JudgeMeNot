@@ -10,9 +10,15 @@ def main(page: ft.Page):
     page.theme_mode = ft.ThemeMode.LIGHT
     page.assets_dir = "assets"
     
-    # --- WINDOW SETTINGS ---
-    page.window_min_width = 800  # Prevent squashing on desktop
-    page.window_min_height = 600
+    # --- WINDOW SETTINGS (FIXED FOR FLET 0.28+) ---
+    # These properties must be set on the 'page.window' object
+    page.window.min_width = 800  
+    page.window.min_height = 600
+    
+    # Optional: Set a nice starting size
+    page.window.width = 1000
+    page.window.height = 700
+    page.window.center() # Centers the window on screen start
     
     auth_service = AuthService()
 
