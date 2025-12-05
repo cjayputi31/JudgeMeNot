@@ -12,12 +12,12 @@ def main(page: ft.Page):
     
     # --- WINDOW SETTINGS (FIXED FOR FLET 0.28+) ---
     # These properties must be set on the 'page.window' object
-    page.window.min_width = 800  
-    page.window.min_height = 600
+    page.window.min_width = 900
+    page.window.min_height = 675
     
     # Optional: Set a nice starting size
-    page.window.width = 1000
-    page.window.height = 700
+    page.window.width = 1280
+    page.window.height = 720
     page.window.center() # Centers the window on screen start
     
     auth_service = AuthService()
