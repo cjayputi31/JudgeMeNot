@@ -353,48 +353,67 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
         )
 
         for e in events:
-            is_pageant = e.event_type == "Pageant"
 
-            # Background setup
-            if is_pageant:
-                # Use the image as card background
-                card_bg = ft.DecorationImage(
-                    fit=ft.ImageFit.COVER,
-                    opacity=0.30,
+            # ========= EVENT TYPE SETTINGS =========
+            if e.event_type == "Pageant":
+                background_image = ft.DecorationImage(
                     src="pageant.png",
+                    fit=ft.ImageFit.COVER,
                 )
-                bg_color = None  # No solid color
-                border_col = ft.Colors.PINK
+                title_color = ft.Colors.WHITE
+                subtitle_color = ft.Colors.AMBER_200
                 icon = ft.Icons.WOMAN
-            else:
-                card_bg = None
-                bg_color = ft.Colors.GREEN_50
-                border_col = ft.Colors.GREEN
-                icon = ft.Icons.QUIZ
 
+            elif e.event_type == "QuizBee":
+                background_image = ft.DecorationImage(
+                    src="quiz.png",
+                    fit=ft.ImageFit.COVER,
+                )
+                title_color = ft.Colors.WHITE
+                subtitle_color = ft.Colors.YELLOW
+                icon = ft.Icons.LIGHTBULB
+
+            else:
+                background_image = None
+                title_color = ft.Colors.BLACK
+                subtitle_color = ft.Colors.GREY
+                icon = ft.Icons.EVENT
+
+            # ========= MANAGE BUTTON =========
             manage_btn = ft.ElevatedButton(
                 "Manage",
                 data=e.id,
                 on_click=lambda ev: page.go(f"/admin/event/{ev.control.data}")
             )
 
-            # Card
-            card = ft.Container(
-                bgcolor=bg_color,
-                border=ft.border.all(1, border_col),
-                border_radius=10,
+            # ========= CARD CONTENT (NO GLASS EFFECT) =========
+            card_content = ft.Container(
                 padding=15,
-                ink=True,
-                image=card_bg,                 # <-- BACKGROUND IMAGE HERE
-                content=ft.Column([
-                    ft.Row([
-                        ft.Icon(icon, color=border_col),
-                        ft.Text(e.event_type, weight="bold", color=border_col)
-                    ]),
-                    ft.Text(e.name, size=18, weight="bold"),
-                    ft.Text(f"Status: {e.status}"),
-                    manage_btn
-                ])
+                content=ft.Column(
+                    [
+                        ft.Row([
+                            ft.Icon(icon, color=subtitle_color),
+                            ft.Text(e.event_type, color=subtitle_color, weight="bold")
+                        ]),
+                        ft.Text(e.name, size=18, weight="bold", color=title_color),
+                        ft.Text(f"Status: {e.status}", color=title_color),
+                        manage_btn
+                    ],
+                    spacing=8
+                )
+            )
+
+            # ========= CARD WITH BACKGROUND =========
+            card = ft.Container(
+                border_radius=10,
+                image=background_image,
+                padding=0,
+                bgcolor=None,  # fully transparent
+                content=ft.Container(
+                    expand=True,
+                    padding=10,
+                    content=card_content
+                )
             )
 
             events_grid.controls.append(card)
