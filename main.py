@@ -2,28 +2,29 @@ import flet as ft
 from services.auth_service import AuthService
 from views.login_view import LoginView
 from views.admin_dashboard import AdminDashboardView
-from views.admin_config_view import AdminConfigView 
+from views.admin_config_view import AdminConfigView
 from views.judge_view import JudgeView
 
 def main(page: ft.Page):
     page.title = "JudgeMeNot System"
     page.theme_mode = ft.ThemeMode.LIGHT
-    page.assets_dir = "assets" # Ensure assets work globally
+    page.assets_dir = "assets"
+    
+    # --- WINDOW SETTINGS ---
+    page.window_min_width = 800  # Prevent squashing on desktop
+    page.window_min_height = 600
     
     auth_service = AuthService()
 
     def route_change(route):
         page.views.clear()
         
-        # Get Session Data
         user_id = page.session.get("user_id")
         user_role = page.session.get("user_role")
 
         print(f"🚗 Navigating to: {page.route} | User: {user_role}")
 
-        # ---------------------------------------------------------
-        # ROUTE 1: LOGIN
-        # ---------------------------------------------------------
+        # --- ROUTE: LOGIN ---
         if page.route == "/login" or page.route == "/":
             page.views.append(
                 ft.View(
@@ -34,50 +35,26 @@ def main(page: ft.Page):
                 )
             )
 
-        # ---------------------------------------------------------
-        # ROUTE 2: ADMIN DASHBOARD
-        # ---------------------------------------------------------
+        # --- ROUTE: ADMIN DASHBOARD ---
         elif page.route == "/admin":
             if user_id and user_role in ["Admin", "AdminViewer"]:
                 page.views.append(
                     ft.View(
                         "/admin", 
                         [AdminDashboardView(page, on_logout)],
-                        padding=0 # Remove padding so sidebar touches edges
+                        padding=0 
                     )
                 )
             else:
                 print("⛔ Access Denied: Admin Dashboard")
                 page.go("/login")
         
-        # ---------------------------------------------------------
-        # ROUTE 3: JUDGE VIEW 
-        # ---------------------------------------------------------
-        elif page.route == "/judge":
-            if user_id and user_role == "Judge":
-                page.views.append(
-                    ft.View(
-                        "/judge", 
-                        [JudgeView(page, on_logout)],
-                        padding=0
-                    )
-                )
-            else:
-                print("⛔ Access Denied: Judge View")
-                page.go("/login")
-
-        # ---------------------------------------------------------
-        # ROUTE 4: EVENT CONFIGURATION 
-        # ---------------------------------------------------------
+        # --- ROUTE: EVENT CONFIGURATION ---
         elif page.route.startswith("/admin/event/"):
-            # Check permissions
             if user_id and user_role == "Admin": 
                 try:
-                    # Extract ID: "/admin/event/5" -> "5" -> 5
                     event_id = int(page.route.split("/")[-1])
-                    
                     print(f"⚙️ Loading Config for Event ID: {event_id}")
-                    
                     page.views.append(
                         ft.View(
                             f"/admin/event/{event_id}",
@@ -93,9 +70,21 @@ def main(page: ft.Page):
                 print("⛔ Access Denied: Event Config")
                 page.go("/login")
 
-        # ---------------------------------------------------------
-        # ROUTE 5: CATCH ALL (404)
-        # ---------------------------------------------------------
+        # --- ROUTE: JUDGE INTERFACE ---
+        elif page.route == "/judge":
+            if user_id and user_role == "Judge":
+                page.views.append(
+                    ft.View(
+                        "/judge", 
+                        [JudgeView(page, on_logout)],
+                        padding=0
+                    )
+                )
+            else:
+                print("⛔ Access Denied: Judge View")
+                page.go("/login")
+
+        # --- CATCH ALL ---
         else:
             print("⚠️ Unknown Route -> Redirecting to Login")
             page.go("/login")
@@ -108,18 +97,16 @@ def main(page: ft.Page):
         page.go(top_view.route)
 
     def on_login_success(user):
-        # Store Session Data
         page.session.set("user_id", user.id)
         page.session.set("user_role", user.role)
         page.session.set("user_name", user.name)
         
-        # Redirect based on Role
         if user.role == "Admin":
             page.go("/admin")
         elif user.role == "Judge":
-            page.go("/judge") # Future route
+            page.go("/judge")
         elif user.role == "Tabulator":
-            page.go("/tabulator") # Future route
+            page.go("/tabulator")
         else:
             page.go("/login")
 
@@ -127,11 +114,8 @@ def main(page: ft.Page):
         page.session.clear()
         page.go("/login")
 
-    # Wire up the events
     page.on_route_change = route_change
     page.on_view_pop = view_pop
-    
-    # Start at current route
     page.go(page.route)
 
 if __name__ == "__main__":
