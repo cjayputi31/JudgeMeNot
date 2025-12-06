@@ -1,26 +1,29 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, desc
 from core.database import SessionLocal
 from models.all_models import Segment, Criteria, Score, Contestant, Event
 
 class PageantService:
     # ---------------------------------------------------------
-    # SEGMENT MANAGEMENT
+    # SEGMENT MANAGEMENT (Updated arguments for Elimination)
     # ---------------------------------------------------------
-    def add_segment(self, event_id, name, weight, order):
+    def add_segment(self, event_id, name, weight, order, is_final=False, limit=0):
         db = SessionLocal()
         try:
-            # VALIDATION: Check total weight of segments
-            current_total = db.query(func.sum(Segment.percentage_weight))\
-                .filter(Segment.event_id == event_id).scalar() or 0.0
-            
-            # Allow a tiny float margin (1.0001)
-            if (current_total + weight) > 1.0001:
-                return False, f"Total exceeds 100%. Current: {int(current_total*100)}%, Adding: {int(weight*100)}%"
+            # VALIDATION: Check total weight of segments (Only for Prelims)
+            if not is_final:
+                current_total = db.query(func.sum(Segment.percentage_weight))\
+                    .filter(Segment.event_id == event_id, Segment.is_final == False).scalar() or 0.0
+                
+                # Allow a tiny float margin
+                if (current_total + weight) > 1.0001:
+                    return False, f"Prelim total exceeds 100%. Current: {int(current_total*100)}%, Adding: {int(weight*100)}%"
 
             new_segment = Segment(
                 event_id=event_id, name=name, percentage_weight=weight, order_index=order,
-                points_per_question=0, total_questions=0
+                is_final=is_final, qualifier_limit=limit,
+                points_per_question=0, total_questions=0,
+                is_active=False
             )
             db.add(new_segment)
             db.commit()
@@ -30,20 +33,23 @@ class PageantService:
         finally:
             db.close()
 
-    def update_segment(self, segment_id, name, weight):
+    def update_segment(self, segment_id, name, weight, is_final, limit):
         db = SessionLocal()
         try:
             seg = db.query(Segment).get(segment_id)
             if seg:
-                # VALIDATION: Sum of OTHER segments
-                current_total = db.query(func.sum(Segment.percentage_weight))\
-                    .filter(Segment.event_id == seg.event_id, Segment.id != segment_id).scalar() or 0.0
-                
-                if (current_total + weight) > 1.0001:
-                    return False, f"Total exceeds 100%. Remaining: {int(current_total*100)}% + New: {int(weight*100)}%"
+                if not is_final:
+                    # Check sum of OTHER prelim segments
+                    current_total = db.query(func.sum(Segment.percentage_weight))\
+                        .filter(Segment.event_id == seg.event_id, Segment.id != segment_id, Segment.is_final == False).scalar() or 0.0
+                    
+                    if (current_total + weight) > 1.0001:
+                        return False, f"Prelim total exceeds 100%. Current: {int(current_total*100)}%"
 
                 seg.name = name
                 seg.percentage_weight = weight
+                seg.is_final = is_final
+                seg.qualifier_limit = limit
                 db.commit()
                 return True, "Updated."
             return False, "Not found."
@@ -51,12 +57,11 @@ class PageantService:
             db.close()
 
     # ---------------------------------------------------------
-    # CRITERIA MANAGEMENT (The Fix You Asked For)
+    # CRITERIA MANAGEMENT
     # ---------------------------------------------------------
     def add_criteria(self, segment_id, name, weight, max_score=100):
         db = SessionLocal()
         try:
-            # VALIDATION: Check total weight of criteria in this segment
             current_total = db.query(func.sum(Criteria.weight))\
                 .filter(Criteria.segment_id == segment_id).scalar() or 0.0
             
@@ -77,7 +82,6 @@ class PageantService:
         try:
             crit = db.query(Criteria).get(criteria_id)
             if crit:
-                # VALIDATION: Sum of OTHER criteria
                 current_total = db.query(func.sum(Criteria.weight))\
                     .filter(Criteria.segment_id == crit.segment_id, Criteria.id != criteria_id).scalar() or 0.0
                 
@@ -86,7 +90,7 @@ class PageantService:
 
                 crit.name = name
                 crit.weight = weight
-                crit.max_score = 100 # Force update to 100 max score
+                crit.max_score = 100 # Force 100
                 db.commit()
                 return True, "Updated."
             return False, "Not found."
@@ -174,6 +178,7 @@ class PageantService:
                 total_event_score = 0.0
                 
                 for s in segments:
+                    # Standard calculation (refine for Finals if needed)
                     segment_score = 0.0
                     criterias = db.query(Criteria).filter(Criteria.segment_id == s.id).all()
                     
@@ -181,10 +186,8 @@ class PageantService:
                         avg_score = db.query(func.avg(Score.score_value))\
                             .filter(Score.contestant_id == c.id, Score.criteria_id == crit.id)\
                             .scalar() or 0.0
-                        # Calculate weighted score for this criteria
                         segment_score += (avg_score * crit.weight)
                     
-                    # Add weighted segment score to total
                     total_event_score += (segment_score * s.percentage_weight)
                 
                 results.append({
@@ -199,8 +202,9 @@ class PageantService:
         finally:
             db.close()
 
-    # --- ACTIVE SEGMENT CONTROL ---
-    
+    # ---------------------------------------------------------
+    # ACTIVE SEGMENT CONTROL
+    # ---------------------------------------------------------
     def set_active_segment(self, event_id, segment_id):
         db = SessionLocal()
         try:
@@ -232,5 +236,66 @@ class PageantService:
                 Segment.event_id == event_id, 
                 Segment.is_active == True
             ).first()
+        finally:
+            db.close()
+
+    # ---------------------------------------------------------
+    # ELIMINATION ENGINE (The new logic you asked for)
+    # ---------------------------------------------------------
+    def get_preliminary_rankings(self, event_id):
+        db = SessionLocal()
+        results = []
+        try:
+            contestants = db.query(Contestant).filter(Contestant.event_id == event_id).all()
+            # Only get Prelim Segments (Not Final)
+            segments = db.query(Segment).filter(Segment.event_id == event_id, Segment.is_final == False).all()
+
+            for c in contestants:
+                total_score = 0.0
+                for s in segments:
+                    segment_score = 0.0
+                    criterias = db.query(Criteria).filter(Criteria.segment_id == s.id).all()
+                    for crit in criterias:
+                        avg = db.query(func.avg(Score.score_value))\
+                            .filter(Score.contestant_id == c.id, Score.criteria_id == crit.id)\
+                            .scalar() or 0.0
+                        segment_score += (avg * crit.weight)
+                    total_score += (segment_score * s.percentage_weight)
+                
+                results.append({"contestant": c, "score": round(total_score, 2)})
+
+            results.sort(key=lambda x: x['score'], reverse=True)
+            return results
+        finally:
+            db.close()
+
+    def activate_final_round(self, event_id, segment_id, limit):
+        db = SessionLocal()
+        try:
+            # 1. Get Ranking
+            rankings = self.get_preliminary_rankings(event_id)
+            
+            # 2. Update Status
+            qualifiers = []
+            eliminated = []
+            
+            for i, entry in enumerate(rankings):
+                c = db.query(Contestant).get(entry['contestant'].id)
+                if i < limit:
+                    c.status = 'Active'
+                    qualifiers.append(c.name)
+                else:
+                    c.status = 'Eliminated'
+                    eliminated.append(c.name)
+            
+            # 3. Activate Segment
+            segments = db.query(Segment).filter(Segment.event_id == event_id).all()
+            for s in segments:
+                s.is_active = (s.id == segment_id)
+            
+            db.commit()
+            return True, qualifiers, eliminated
+        except Exception as e:
+            return False, [], []
         finally:
             db.close()

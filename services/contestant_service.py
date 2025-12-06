@@ -36,12 +36,16 @@ class ContestantService:
         finally:
             db.close()
 
-    def get_contestants(self, event_id):
-        db: Session = SessionLocal()
+    def get_contestants(self, event_id, active_only=True):
+        db = SessionLocal()
         try:
-            # Return sorted by candidate number
-            return db.query(Contestant).filter(Contestant.event_id == event_id)\
-                     .order_by(Contestant.candidate_number).all()
+            query = db.query(Contestant).filter(Contestant.event_id == event_id)
+            
+            # If active_only is True, filter out eliminated
+            if active_only:
+                query = query.filter(Contestant.status == 'Active')
+                
+            return query.order_by(Contestant.candidate_number).all()
         finally:
             db.close()
 

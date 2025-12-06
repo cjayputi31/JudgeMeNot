@@ -46,10 +46,6 @@ class Event(Base):
     contestants = relationship("Contestant", back_populates="event")
 
 class Segment(Base):
-    """
-    Pageant = 'Swimwear', 'Evening Gown'
-    QuizBee = 'Easy Round', 'Difficult Round'
-    """
     __tablename__ = 'segments'
     
     id = Column(Integer, primary_key=True)
@@ -59,9 +55,11 @@ class Segment(Base):
     
     # PAGEANT FIELDS
     percentage_weight = Column(Float, default=0.0)
+    is_active = Column(Boolean, default=False)
     
-    # NEW FIELD: Controls if judges can see this
-    is_active = Column(Boolean, default=False) 
+    # NEW: ELIMINATION LOGIC
+    is_final = Column(Boolean, default=False) # Is this the "reset" round?
+    qualifier_limit = Column(Integer, default=0) # How many get in? (e.g. Top 5)
 
     # QUIZ BEE FIELDS
     points_per_question = Column(Integer, default=1)
@@ -70,6 +68,8 @@ class Segment(Base):
     event = relationship("Event", back_populates="segments")
     criteria = relationship("Criteria", back_populates="segment")
     scores = relationship("Score", back_populates="segment")
+
+
 class Criteria(Base):
     """Only for Pageants (e.g., 'Poise' 40%)"""
     __tablename__ = 'criteria'
@@ -92,11 +92,13 @@ class Contestant(Base):
     id = Column(Integer, primary_key=True)
     event_id = Column(Integer, ForeignKey('events.id'))
     
-    candidate_number = Column(Integer) # "Candidate #1"
+    candidate_number = Column(Integer)
     name = Column(String(100), nullable=False)
-    gender = Column(String(10)) # 'Male', 'Female', or NULL
+    gender = Column(String(10)) 
     
-    # For Quiz Bees: Assign a specific tabulator to this team
+    # NEW: STATUS ('Active', 'Eliminated')
+    status = Column(String(20), default='Active') 
+    
     assigned_tabulator_id = Column(Integer, ForeignKey('users.id'), nullable=True)
     
     event = relationship("Event", back_populates="contestants")

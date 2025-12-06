@@ -120,11 +120,15 @@ def AdminConfigView(page: ft.Page, event_id: int):
     # ---------------------------------------------------------
     # 3. PAGEANT CONFIGURATION UI (TAB 1)
     # ---------------------------------------------------------
-    p_seg_name = ft.TextField(label="Segment Name (e.g., Swimwear)", width=280)
+    p_seg_name = ft.TextField(label="Segment Name", width=280)
     p_seg_weight = ft.TextField(label="Weight (%)", suffix_text="%", keyboard_type=ft.KeyboardType.NUMBER, width=280)
     
-    p_crit_name = ft.TextField(label="Criteria Name (e.g., Poise)", width=280)
+    p_crit_name = ft.TextField(label="Criteria Name", width=280)
     p_crit_weight = ft.TextField(label="Weight (%)", suffix_text="%", keyboard_type=ft.KeyboardType.NUMBER, width=280)
+
+    p_is_final = ft.Checkbox(label="Is Final Round?", value=False)
+    p_qualifiers = ft.TextField(label="Qualifiers Count", value="5", width=280, visible=False, keyboard_type=ft.KeyboardType.NUMBER)
+
     
     selected_segment_id = None 
     editing_segment_id = None 
@@ -133,6 +137,16 @@ def AdminConfigView(page: ft.Page, event_id: int):
     # --- SAFETY CONFIRMATION STATE ---
     pending_action_seg_id = None # Stores the ID we want to activate/deactivate
     
+    def on_final_check(e):
+        # Toggle visibility of qualifiers input and weight
+        p_qualifiers.visible = p_is_final.value
+        # If final, weight implies 100% of the reset score, but usually we just leave it for criteria weight
+        p_seg_weight.disabled = p_is_final.value 
+        if p_is_final.value: p_seg_weight.value = "100" # Visual only
+        page.update()
+
+    p_is_final.on_change = on_final_check
+
     # 1. Simple Confirm Dialog
     def confirm_simple_action(e):
         execute_toggle(pending_action_seg_id)
@@ -270,6 +284,14 @@ def AdminConfigView(page: ft.Page, event_id: int):
                 action_tooltip = "Set Active"
                 border_side = None
 
+            # NEW: DIFFERENT CARD COLOR FOR FINAL ROUND
+            if seg.is_final:
+                card_bg = ft.Colors.AMBER_50
+                badge = ft.Container(content=ft.Text(f"FINAL ROUND (Top {seg.qualifier_limit})", color="black", weight="bold"), bgcolor=ft.Colors.AMBER_300, padding=5, border_radius=5)
+            else:
+                card_bg = ft.Colors.WHITE
+                badge = ft.Chip(label=ft.Text(f"{int(seg.percentage_weight * 100)}%"))
+
             card = ft.Card(
                 content=ft.Container(
                     bgcolor=status_color,
@@ -316,27 +338,80 @@ def AdminConfigView(page: ft.Page, event_id: int):
         db.close()
         return ft.Container(content=ui_column, padding=20)
 
+    def request_final_activation(seg_id):
+        # 1. Get Rankings Preview
+        # We need to temporarily fetch the segment object to get the limit
+        db = SessionLocal()
+        seg = db.query(Segment).get(seg_id)
+        limit = seg.qualifier_limit
+        db.close()
+
+        # 2. Calculate who qualifies
+        rankings = pageant_service.get_preliminary_rankings(event_id)
+        
+        qualifiers_list = []
+        eliminated_list = []
+        
+        for i, r in enumerate(rankings):
+            line = f"#{i+1} {r['contestant'].name} - {r['score']}%"
+            if i < limit:
+                qualifiers_list.append(ft.Text(line, weight="bold", color="green"))
+            else:
+                eliminated_list.append(ft.Text(line, color="grey"))
+
+        # 3. Show Confirmation Dialog
+        final_confirm_dialog = ft.AlertDialog(
+            title=ft.Text("Confirm Final Round"),
+            content=ft.Column([
+                ft.Text(f"Activating this will ELIMINATE candidates below Rank {limit}.", color="red"),
+                ft.Divider(),
+                ft.Text("QUALIFIERS (Scores Reset to 0):", weight="bold"),
+                ft.Column(qualifiers_list),
+                ft.Divider(),
+                ft.Text("ELIMINATED:", weight="bold"),
+                ft.Column(eliminated_list),
+            ], scroll="adaptive", height=300, width=400),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda e: page.close(final_confirm_dialog)),
+                ft.ElevatedButton("CONFIRM & ACTIVATE", bgcolor="red", color="white", on_click=lambda e: execute_final_activation(seg_id, limit, final_confirm_dialog))
+            ]
+        )
+        page.open(final_confirm_dialog)
+
+    def execute_final_activation(seg_id, limit, dlg):
+        success, q, e = pageant_service.activate_final_round(event_id, seg_id, limit)
+        page.close(dlg)
+        if success:
+            page.open(ft.SnackBar(ft.Text(f"Final Round Active! {len(q)} Qualified."), bgcolor="green"))
+            refresh_ui()
+        else:
+            page.open(ft.SnackBar(ft.Text("Error activating round."), bgcolor="red"))
+
+
     def save_segment(e):
         try:
-            raw_val = float(p_seg_weight.value)
-            if raw_val > 1.0: 
-                w = raw_val / 100.0
+            if not p_is_final.value:
+                raw_val = float(p_seg_weight.value)
+                w = raw_val / 100.0 if raw_val > 1.0 else raw_val
             else:
-                w = raw_val 
+                w = 0 # Weight irrelevant for final round relative to prelims
             
+            limit = int(p_qualifiers.value) if p_is_final.value else 0
+
             if editing_segment_id:
-                success, msg = pageant_service.update_segment(editing_segment_id, p_seg_name.value, w)
+                success, msg = pageant_service.update_segment(editing_segment_id, p_seg_name.value, w, p_is_final.value, limit)
             else:
-                success, msg = pageant_service.add_segment(event_id, p_seg_name.value, w, 1)
+                success, msg = pageant_service.add_segment(event_id, p_seg_name.value, w, 1, p_is_final.value, limit)
 
             if success:
-                page.open(ft.SnackBar(ft.Text("Segment Saved!"), bgcolor="green"))
+                page.open(ft.SnackBar(ft.Text("Saved!"), bgcolor="green"))
                 page.close(seg_dialog)
                 refresh_ui()
             else:
                 page.open(ft.SnackBar(ft.Text(f"Error: {msg}"), bgcolor="red"))
         except ValueError:
-             page.open(ft.SnackBar(ft.Text("Invalid Weight"), bgcolor="red"))
+             page.open(ft.SnackBar(ft.Text("Invalid Input"), bgcolor="red"))
+
 
     def save_criteria(e):
         try:
@@ -363,7 +438,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
     # Dialogs
     seg_dialog = ft.AlertDialog(
         title=ft.Text("Segment Details"),
-        content=ft.Column([p_seg_name, p_seg_weight], height=150, width=300, tight=True),
+        content=ft.Column([p_seg_name, p_is_final, p_qualifiers, p_seg_weight], height=300, width=300, tight=True),
         actions=[ft.TextButton("Save", on_click=save_segment)]
     )
     
