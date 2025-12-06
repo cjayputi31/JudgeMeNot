@@ -95,9 +95,10 @@ class Contestant(Base):
     candidate_number = Column(Integer)
     name = Column(String(100), nullable=False)
     gender = Column(String(10)) 
-    
-    # NEW: STATUS ('Active', 'Eliminated')
     status = Column(String(20), default='Active') 
+    
+    # NEW: Image Path
+    image_path = Column(String(255), nullable=True) 
     
     assigned_tabulator_id = Column(Integer, ForeignKey('users.id'), nullable=True)
     
@@ -129,6 +130,16 @@ class Score(Base):
     judge = relationship("User", back_populates="scores_given")
     segment = relationship("Segment", back_populates="scores")
     criteria = relationship("Criteria", back_populates="scores")
+
+class JudgeProgress(Base):
+    __tablename__ = 'judge_progress'
+    
+    id = Column(Integer, primary_key=True)
+    judge_id = Column(Integer, ForeignKey('users.id'))
+    segment_id = Column(Integer, ForeignKey('segments.id'))
+    
+    # If True, the judge cannot change scores for this segment anymore
+    is_finished = Column(Boolean, default=False) 
 
 class AuditLog(Base):
     __tablename__ = 'audit_logs'

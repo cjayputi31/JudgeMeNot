@@ -2,6 +2,7 @@ import flet as ft
 from services.pageant_service import PageantService
 from services.contestant_service import ContestantService
 import time, threading
+from datetime import datetime
 
 def JudgeView(page: ft.Page, on_logout_callback):
     # Services
@@ -16,228 +17,202 @@ def JudgeView(page: ft.Page, on_logout_callback):
     current_event = None
     selected_segment = None
     
-    # Polling State
-    is_polling = False
-    
     # Registry
     cards_registry = {}
+    
+    # Polling State
+    is_polling = False
+    last_check_text = ft.Text("Initializing...", size=12, color="grey")
 
     # Layout Containers
     main_container = ft.Container(expand=True, padding=10)
 
     # ---------------------------------------------------------
-    # 0. POLLING LOGIC (RESTORED)
+    # 0. POLLING LOGIC
     # ---------------------------------------------------------
     def start_polling():
         nonlocal is_polling
         if is_polling: return 
         is_polling = True
+        print("🔄 Polling Started...")
         threading.Thread(target=poll_active_segment, daemon=True).start()
 
     def stop_polling():
         nonlocal is_polling
         is_polling = False
+        print("🛑 Polling Stopped.")
 
     def poll_active_segment():
         while is_polling and current_event:
             try:
-                # 1. Check DB
                 active_seg_db = pageant_service.get_active_segment(current_event.id)
-                db_id = active_seg_db.id if active_seg_db else None
+                try:
+                    new_seg_id = active_seg_db.id if active_seg_db else None
+                except:
+                    new_seg_id = None 
                 
-                # 2. Check Screen
-                current_id = selected_segment['segment'].id if selected_segment else None
+                current_seg_id = selected_segment['segment'].id if selected_segment else None
                 
-                # 3. Compare
-                if db_id != current_id:
-                    # If DB is None (Deactivated) != Screen (Active), this triggers.
-                    # If DB is New ID != Screen Old ID, this triggers.
-                    print(f"🔄 Auto-Refresh: {current_id} -> {db_id}")
+                if last_check_text.page:
+                    now = datetime.now().strftime("%H:%M:%S")
+                    last_check_text.value = f"Last checked: {now}"
+                    try:
+                        last_check_text.update()
+                    except: pass 
+
+                if new_seg_id != current_seg_id:
+                    print(f"⚡ Segment Change: {current_seg_id} -> {new_seg_id}")
+                    if page.dialog and page.dialog.open:
+                        page.close(page.dialog)
                     enter_scoring_dashboard(current_event)
-                
             except Exception as e:
-                print(f"Polling Error: {e}")
-            
-            time.sleep(3)
+                pass
+            time.sleep(2)
 
     # ---------------------------------------------------------
-    # 1. HEADER & GLOBAL SUBMIT LOGIC
+    # 1. HEADER & GLOBAL SUBMIT
     # ---------------------------------------------------------
+    
+    def show_waiting_room(title, msg):
+        start_polling() 
+        content = ft.Column([
+            ft.ProgressRing(width=50, height=50),
+            ft.Container(height=20),
+            ft.Text(title, size=24, weight="bold", text_align="center"),
+            ft.Text(msg, color="grey", size=16, text_align="center"),
+            ft.Text("Screen will refresh automatically.", italic=True, color="blue"),
+            last_check_text, 
+            ft.Container(height=20),
+            ft.OutlinedButton("Manual Refresh", icon=ft.Icons.REFRESH, on_click=lambda e: enter_scoring_dashboard(current_event))
+        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER)
+
+        main_container.content = ft.Column([
+            ft.Row([ft.IconButton(icon=ft.Icons.ARROW_BACK, on_click=lambda e: load_event_selector())]),
+            ft.Container(content=content, alignment=ft.alignment.center, expand=True)
+        ], expand=True)
+        page.update()
+
     def submit_final_scores(e):
         missing_candidates = []
+        unlocked_candidates = []
         
         for c_id, card_data in cards_registry.items():
-            btn = card_data['btn']
             inputs = card_data['inputs']
             candidate_info = card_data['info'] 
+            is_locked_func = card_data['get_locked_status']
             
-            card_is_complete = True
+            has_empty = False
+            for ref in inputs.values():
+                if not ref['field'].value:
+                    has_empty = True
+                    break 
             
-            btn.content = ft.ProgressRing(width=16, height=16, stroke_width=2, color="white")
-            btn.update()
+            if has_empty:
+                missing_candidates.append(f"{candidate_info['name']}")
+                continue 
 
-            for crit_id, ref in inputs.items():
-                val_str = ref['field'].value
-                max_val = ref['max']
-                
-                if not val_str:
-                    ref['field'].border_color = "red"
-                    card_is_complete = False
-                    continue
-                
-                try:
-                    val = float(val_str)
-                    if val < 0 or val > max_val:
-                        ref['field'].border_color = "red"
-                        card_is_complete = False
-                    else:
-                        ref['field'].border_color = ft.Colors.GREEN
-                        pageant_service.submit_score(judge_id, c_id, crit_id, val)
-                except ValueError:
-                    ref['field'].border_color = "red"
-                    card_is_complete = False
+            if not is_locked_func():
+                unlocked_candidates.append(f"{candidate_info['name']}")
 
-            if card_is_complete:
-                btn.bgcolor = ft.Colors.GREEN
-                btn.content = ft.Row([ft.Icon(ft.Icons.CHECK, color="white", size=16), ft.Text("Saved", color="white")], alignment=ft.MainAxisAlignment.CENTER)
-            else:
-                btn.bgcolor = ft.Colors.ORANGE
-                btn.content = ft.Text("Incomplete", color="white")
-                missing_candidates.append(f"{candidate_info['name']} ({candidate_info['gender']})")
-            
-            btn.update()
-
+        error_msg_controls = []
         if missing_candidates:
-            content = ft.Column(tight=True, spacing=10)
-            content.controls.append(ft.Text("The following candidates have missing scores:", color="red"))
-            for m in missing_candidates:
-                content.controls.append(ft.Text(f"• {m}", weight="bold"))
-            content.controls.append(ft.Container(height=10))
-            content.controls.append(ft.Text("Look for the Orange buttons.", size=12, italic=True))
+            error_msg_controls.append(ft.Text("Missing scores for:", color="red", weight="bold"))
+            for m in missing_candidates[:3]: error_msg_controls.append(ft.Text(f"• {m}"))
+            error_msg_controls.append(ft.Container(height=5))
 
-            dlg = ft.AlertDialog(
-                title=ft.Text("Submission Incomplete"),
-                content=content,
-                actions=[ft.TextButton("OK", on_click=lambda e: page.close(dlg))]
-            )
+        if unlocked_candidates:
+            error_msg_controls.append(ft.Text("Not Locked & Saved:", color="orange", weight="bold"))
+            for u in unlocked_candidates[:3]: error_msg_controls.append(ft.Text(f"• {u}"))
+            error_msg_controls.append(ft.Text("Please click 'Lock & Save' on these cards.", size=12, italic=True))
+
+        if error_msg_controls:
+            dlg = ft.AlertDialog(title=ft.Text("Submission Incomplete"), content=ft.Column(error_msg_controls, tight=True), actions=[ft.TextButton("OK", on_click=lambda e: page.close(dlg))])
             page.open(dlg)
-        else:
-            page.open(ft.SnackBar(ft.Text("All scores submitted successfully!"), bgcolor="green"))
+            return
 
-    submit_all_btn = ft.ElevatedButton(
-        "Submit Final Tally", 
-        icon=ft.Icons.PUBLISH,
-        bgcolor=ft.Colors.GREEN_600,
-        color="white",
-        on_click=submit_final_scores
-    )
+        def confirm_submission(e):
+            page.close(confirm_dlg)
+            pageant_service.mark_judge_finished(judge_id, selected_segment['segment'].id)
+            show_waiting_room("Scores Submitted!", "Waiting for next segment...")
+            
+        confirm_dlg = ft.AlertDialog(
+            title=ft.Text("Confirm Submission"),
+            content=ft.Text("Are you sure? All scores are locked and saved.\nYou cannot change scores after this."),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda e: page.close(confirm_dlg)),
+                ft.ElevatedButton("CONFIRM", bgcolor="green", color="white", on_click=confirm_submission)
+            ]
+        )
+        page.open(confirm_dlg)
+
+    submit_all_btn = ft.ElevatedButton("Submit Final Tally", icon=ft.Icons.PUBLISH, bgcolor=ft.Colors.GREEN_600, color="white", on_click=submit_final_scores)
 
     header = ft.Container(
         content=ft.Row([
-            ft.Row([
-                ft.Icon(ft.Icons.GAVEL, color=ft.Colors.WHITE),
-                ft.Column([
-                    ft.Text(f"Judge: {judge_name}", weight="bold", size=16, color="white"),
-                    ft.Text("Scoring Panel", size=12, color=ft.Colors.WHITE70)
-                ], spacing=2)
-            ]),
-            ft.Row([
-                submit_all_btn,
-                ft.IconButton(icon=ft.Icons.LOGOUT, icon_color="white", on_click=on_logout_callback)
-            ])
-        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-        padding=15,
-        bgcolor=ft.Colors.BLUE_800,
-        border_radius=ft.border_radius.only(bottom_left=10, bottom_right=10)
+            ft.Row([ft.Icon(ft.Icons.GAVEL, color="white"), ft.Column([ft.Text(f"Judge: {judge_name}", weight="bold", color="white"), ft.Text("Scoring Panel", size=12, color="white70")], spacing=2)]),
+            ft.Row([submit_all_btn, ft.IconButton(icon=ft.Icons.LOGOUT, icon_color="white", on_click=on_logout_callback)])
+        ], alignment="spaceBetween"),
+        padding=15, bgcolor=ft.Colors.BLUE_800
     )
 
     # ---------------------------------------------------------
     # 2. SELECT EVENT
     # ---------------------------------------------------------
     def load_event_selector():
-        stop_polling() # Stop background task when leaving dashboard
-        
+        stop_polling()
         events = pageant_service.get_active_pageants()
-        
         grid = ft.GridView(expand=True, max_extent=300, spacing=20, run_spacing=20)
         
         for e in events:
-            grid.controls.append(
-                ft.Container(
-                    bgcolor=ft.Colors.WHITE,
-                    border=ft.border.all(1, ft.Colors.BLUE_100),
-                    border_radius=15,
-                    padding=20,
-                    shadow=ft.BoxShadow(blur_radius=10, color=ft.Colors.BLUE_GREY_100),
-                    content=ft.Column([
-                        ft.Icon(ft.Icons.STAR_ROUNDED, size=50, color=ft.Colors.ORANGE),
-                        ft.Text(e.name, weight="bold", size=18, text_align="center"),
-                        ft.Text(f"Status: {e.status}", color="green"),
-                        ft.ElevatedButton("Start Judging", width=150, on_click=lambda x, ev=e: enter_scoring_dashboard(ev))
-                    ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                    on_click=lambda x, ev=e: enter_scoring_dashboard(ev)
-                )
-            )
+            grid.controls.append(ft.Container(
+                bgcolor="white", border_radius=15, padding=20, shadow=ft.BoxShadow(blur_radius=10, color="grey"),
+                content=ft.Column([
+                    ft.Icon(ft.Icons.STAR_ROUNDED, size=50, color="orange"),
+                    ft.Text(e.name, weight="bold", size=18, text_align="center"),
+                    ft.Text(f"Status: {e.status}", color="green"),
+                    ft.ElevatedButton("Start Judging", on_click=lambda x, ev=e: enter_scoring_dashboard(ev))
+                ], alignment="center", horizontal_alignment="center"),
+                on_click=lambda x, ev=e: enter_scoring_dashboard(ev)
+            ))
         
-        main_container.content = ft.Column([
-            ft.Text("Select Active Event", size=24, weight="bold"),
-            ft.Divider(),
-            grid
-        ], expand=True)
+        main_container.content = ft.Column([ft.Text("Select Active Event", size=24, weight="bold"), ft.Divider(), grid], expand=True)
         page.update()
 
-    # ---------------------------------------------------------
-    # 3. SCORING DASHBOARD
-    # ---------------------------------------------------------
     def enter_scoring_dashboard(event):
         nonlocal current_event, selected_segment
         current_event = event
         
-        # 1. Fetch ACTIVE
         active_seg = pageant_service.get_active_segment(current_event.id)
         
         if not active_seg:
             selected_segment = None
-            show_waiting_room()
-            start_polling() # Keep polling until admin activates something
+            show_waiting_room("Waiting for Admin...", "No segment is currently active.")
             return
 
-        # 2. Load Data
+        if pageant_service.has_judge_finished(judge_id, active_seg.id):
+            selected_segment = {'segment': active_seg} 
+            show_waiting_room("Scores Submitted!", "You have already scored this segment.")
+            return
+
         structure = pageant_service.get_event_structure(current_event.id)
         target_struct = next((s for s in structure if s['segment'].id == active_seg.id), None)
         
         if target_struct:
             selected_segment = target_struct
             render_dashboard(target_struct)
-            start_polling() # Keep polling for changes/deactivation
+            start_polling()
         else:
             page.open(ft.SnackBar(ft.Text("Error loading data"), bgcolor="red"))
 
-    def show_waiting_room():
-        main_container.content = ft.Column([
-            ft.Row([ft.IconButton(icon=ft.Icons.ARROW_BACK, on_click=lambda e: load_event_selector())]),
-            ft.Container(
-                content=ft.Column([
-                    ft.ProgressRing(width=50, height=50, stroke_width=4),
-                    ft.Container(height=20),
-                    ft.Text("Waiting for Admin...", size=24, weight="bold"),
-                    ft.Text("No segment is currently active.", color="grey", size=16),
-                    ft.Text("The screen will refresh automatically.", italic=True, color="blue"),
-                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                alignment=ft.alignment.center,
-                expand=True
-            )
-        ], expand=True)
-        page.update()
-
+    # ---------------------------------------------------------
+    # 3. RENDER DASHBOARD
+    # ---------------------------------------------------------
     def render_dashboard(structure_item):
-        segment_title = ft.Text(
-            f"Segment: {structure_item['segment'].name}", 
-            size=20, weight="bold", color=ft.Colors.BLUE_800
-        )
+        segment_title = ft.Text(f"{structure_item['segment'].name}", size=20, weight="bold", color=ft.Colors.BLUE_800)
+        refresh_btn = ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Force Refresh", on_click=lambda e: enter_scoring_dashboard(current_event))
 
         gender_selector = ft.SegmentedButton(
-            selected={ "0" }, 
+            selected={"0"},
             segments=[
                 ft.Segment(value="0", label=ft.Text("All"), icon=ft.Icon(ft.Icons.GROUPS)),
                 ft.Segment(value="1", label=ft.Text("Female"), icon=ft.Icon(ft.Icons.WOMAN)),
@@ -250,228 +225,122 @@ def JudgeView(page: ft.Page, on_logout_callback):
 
         def rebuild_view(tab_index):
             cards_registry.clear()
-            candidates = contestant_service.get_contestants(current_event.id)
+            candidates = contestant_service.get_contestants(current_event.id, active_only=True)
             
-            def get_cards(filter_gender, is_flow_layout=False):
-                subset = [c for c in candidates if c.gender == filter_gender]
+            def get_cards(gender):
+                subset = [c for c in candidates if c.gender == gender]
                 res = []
                 for c in subset:
                     scores = pageant_service.get_judge_scores(judge_id, c.id)
-                    res.append(create_scoring_card(c, scores, set_fixed_width=is_flow_layout))
+                    res.append(create_scoring_card(c, scores))
                 return res
 
             if tab_index == 0: 
-                header_male = ft.Container(content=ft.Text("Male Candidates", weight="bold", color=ft.Colors.BLUE), bgcolor=ft.Colors.BLUE_50, padding=10, border_radius=5, alignment=ft.alignment.center, width=float("inf"))
-                male_cards = get_cards("Male", False)
-                list_male = ft.Column(controls=male_cards, expand=True, scroll="hidden", spacing=15, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
-                
-                header_female = ft.Container(content=ft.Text("Female Candidates", weight="bold", color=ft.Colors.PINK), bgcolor=ft.Colors.PINK_50, padding=10, border_radius=5, alignment=ft.alignment.center, width=float("inf"))
-                female_cards = get_cards("Female", False)
-                list_female = ft.Column(controls=female_cards, expand=True, scroll="hidden", spacing=15, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
-
-                content_area.content = ft.Row([
-                    ft.Column([header_male, list_male], expand=True), 
-                    ft.VerticalDivider(width=1),
-                    ft.Column([header_female, list_female], expand=True)
-                ], expand=True)
-
+                header_male = ft.Container(content=ft.Text("Male Candidates", weight="bold", color="blue"), bgcolor=ft.Colors.BLUE_50, padding=10, border_radius=5, alignment=ft.alignment.center, width=500)
+                list_male = ft.Column(controls=get_cards("Male"), expand=True, scroll="hidden", spacing=15, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+                header_female = ft.Container(content=ft.Text("Female Candidates", weight="bold", color="pink"), bgcolor=ft.Colors.PINK_50, padding=10, border_radius=5, alignment=ft.alignment.center, width=500)
+                list_female = ft.Column(controls=get_cards("Female"), expand=True, scroll="hidden", spacing=15, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+                content_area.content = ft.Row([ft.Column([header_male, list_male], expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER), ft.VerticalDivider(width=1), ft.Column([header_female, list_female], expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)], expand=True)
             else: 
                 target = "Female" if tab_index == 1 else "Male"
-                cards = get_cards(target, True)
-                
+                cards = get_cards(target)
                 if not cards:
-                    content_area.content = ft.Column(
-                        [
-                            ft.Icon(ft.Icons.SEARCH_OFF, size=50, color="grey"),
-                            ft.Text("No candidates found.", italic=True, size=16, color="grey")
-                        ], 
-                        alignment=ft.MainAxisAlignment.CENTER, 
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        expand=True
-                    )
+                    content_area.content = ft.Column([ft.Icon(ft.Icons.SEARCH_OFF, size=50, color="grey"), ft.Text("No candidates found.", color="grey")], alignment="center", horizontal_alignment="center", expand=True)
                 else:
+                    # FIX: Center Alignment for Flow View
                     content_area.content = ft.Column(
                         controls=[
                             ft.Row(
                                 controls=cards, 
                                 wrap=True, 
-                                alignment=ft.MainAxisAlignment.CENTER,
-                                spacing=20,
+                                alignment=ft.MainAxisAlignment.CENTER, # <--- CENTERING FIX
+                                spacing=20, 
                                 run_spacing=20
                             )
-                        ],
-                        scroll="adaptive",
+                        ], 
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER, # <--- DOUBLE CENTER
+                        scroll="adaptive", 
                         expand=True
                     )
             
             page.update()
 
-        # 4. CARD CREATOR
-        def create_scoring_card(contestant, existing_scores, set_fixed_width=False):
-            border_color = ft.Colors.BLUE_200 if contestant.gender == "Male" else ft.Colors.PINK_200
-            
+        def create_scoring_card(contestant, existing_scores):
+            border_col = ft.Colors.BLUE_200 if contestant.gender == "Male" else ft.Colors.PINK_200
             inputs_column = ft.Column(spacing=5)
-            local_inputs = {} 
-            current_criteria = structure_item['criteria']
+            local_inputs = {}
+            is_locked = False
+
+            def toggle_lock(e):
+                nonlocal is_locked
+                btn = e.control
+                if not is_locked:
+                    btn.content = ft.ProgressRing(width=16, height=16, stroke_width=2, color="white"); btn.disabled = True; page.update()
+                    valid = True
+                    for crit_id, ref in local_inputs.items():
+                        val_str = ref['field'].value
+                        if not val_str: valid=False; ref['field'].border_color="red"; continue
+                        try:
+                            val = float(val_str)
+                            if val < 0 or val > ref['max']: valid=False; ref['field'].border_color="red"
+                            else: ref['field'].border_color="green"; pageant_service.submit_score(judge_id, contestant.id, crit_id, val)
+                        except: valid=False; ref['field'].border_color="red"
+                    btn.disabled = False
+                    if valid:
+                        is_locked = True; btn.bgcolor = ft.Colors.ORANGE; btn.content = ft.Row([ft.Icon(ft.Icons.LOCK, color="white", size=16), ft.Text("Unlock", color="white")], alignment="center")
+                        for ref in local_inputs.values(): ref['field'].read_only = True; ref['field'].update()
+                    else:
+                        btn.bgcolor = ft.Colors.RED; btn.content = ft.Text("Error", color="white")
+                        def revert(): time.sleep(2); btn.bgcolor=ft.Colors.BLUE; btn.content=ft.Text("Lock & Save", color="white"); btn.update()
+                        threading.Thread(target=revert).start()
+                else:
+                    is_locked = False; btn.bgcolor = ft.Colors.BLUE; btn.content = ft.Text("Lock & Save", color="white")
+                    for ref in local_inputs.values(): ref['field'].read_only = False; ref['field'].update()
+                page.update()
 
             def on_input_change(e):
-                btn = cards_registry[contestant.id]['btn']
-                if btn.bgcolor != ft.Colors.BLUE:
-                    btn.bgcolor = ft.Colors.BLUE
-                    btn.content = ft.Text("Save Score", color="white")
-                    btn.update()
+                if not is_locked:
+                    btn = cards_registry[contestant.id]['btn']
+                    if btn.bgcolor != ft.Colors.BLUE: btn.bgcolor, btn.content = ft.Colors.BLUE, ft.Text("Lock & Save", color="white"); btn.update()
 
-            for crit in current_criteria:
+            for crit in structure_item['criteria']:
                 val = existing_scores.get(crit.id, "")
-                
-                tf = ft.TextField(
-                    value=str(val) if val != "" else "",
-                    width=80, 
-                    height=35,
-                    text_size=14,
-                    content_padding=5,
-                    keyboard_type=ft.KeyboardType.NUMBER,
-                    text_align=ft.TextAlign.CENTER,
-                    border_color=ft.Colors.GREY_400,
-                    bgcolor=ft.Colors.WHITE,
-                    hint_text="0",
-                    on_change=on_input_change
-                )
+                tf = ft.TextField(value=str(val) if val!="" else "", width=70, height=30, text_size=14, content_padding=5, text_align="center", on_change=on_input_change)
                 local_inputs[crit.id] = {"field": tf, "max": crit.max_score}
                 
-                inputs_column.controls.append(
-                    ft.Container(
-                        bgcolor=ft.Colors.GREY_50, padding=5, border_radius=5,
-                        content=ft.Row([
-                            ft.Text(crit.name, size=13, weight="w500", expand=True, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
-                            ft.Text(f"/{int(crit.max_score)}", size=10, color="grey"), 
-                            tf
-                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
-                    )
-                )
-
-            def save_card(e):
-                btn = e.control
-                btn.content = ft.ProgressRing(width=16, height=16, stroke_width=2, color="white")
-                btn.disabled = True
-                page.update()
-
-                valid = True
-                for crit_id, ref in local_inputs.items():
-                    val_str = ref['field'].value
-                    max_val = ref['max']
-                    
-                    if not val_str: 
-                        valid = False 
-                        ref['field'].border_color = "red"
-                        continue 
-                    
-                    try:
-                        val = float(val_str)
-                        if val < 0 or val > max_val:
-                            ref['field'].border_color = "red"
-                            valid = False
-                        else:
-                            ref['field'].border_color = ft.Colors.GREEN
-                            pageant_service.submit_score(judge_id, contestant.id, crit_id, val)
-                    except ValueError:
-                        ref['field'].border_color = "red"
-                        valid = False
+                # FIX: Show both Max Score AND Weight Percentage
+                label_text = f"/{int(crit.max_score)} ({int(crit.weight * 100)}%)"
                 
-                if valid:
-                    btn.bgcolor = ft.Colors.GREEN
-                    btn.content = ft.Row([ft.Icon(ft.Icons.CHECK, color="white", size=16), ft.Text("Saved", color="white")], alignment=ft.MainAxisAlignment.CENTER)
-                else:
-                    btn.bgcolor = ft.Colors.ORANGE
-                    btn.content = ft.Text("Incomplete", color="white")
-                    btn.disabled = False 
-                
-                page.update()
-                
-                def revert():
-                    time.sleep(4)
-                    if btn.bgcolor != ft.Colors.BLUE: 
-                        btn.bgcolor = ft.Colors.BLUE
-                        btn.content = ft.Text("Save Score", color="white")
-                        btn.disabled = False
-                        try: page.update()
-                        except: pass
-                threading.Thread(target=revert).start()
+                inputs_column.controls.append(ft.Row([
+                    ft.Text(crit.name, size=13, weight="bold", expand=True, max_lines=1, overflow="ellipsis"), 
+                    ft.Text(label_text, size=11, color="grey"), # The updated label
+                    tf
+                ], alignment="spaceBetween"))
 
-            save_btn = ft.ElevatedButton(
-                content=ft.Text("Save Score", color="white"),
-                bgcolor=ft.Colors.BLUE,
-                style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8)),
-                width=float("inf"),
-                height=40,
-                on_click=save_card
-            )
-
-            cards_registry[contestant.id] = {
-                'btn': save_btn,
-                'inputs': local_inputs,
-                'info': {'name': contestant.name, 'gender': contestant.gender}
-            }
+            save_btn = ft.ElevatedButton(content=ft.Text("Lock & Save", color="white", size=14), bgcolor=ft.Colors.BLUE, width=float("inf"), height=40, on_click=toggle_lock)
+            def get_locked_status(): return is_locked
+            cards_registry[contestant.id] = {'btn': save_btn, 'inputs': local_inputs, 'info': {'name': contestant.name, 'gender': contestant.gender}, 'get_locked_status': get_locked_status}
+            
+            img_content = ft.Image(src=contestant.image_path, fit=ft.ImageFit.COVER, error_content=ft.Icon(ft.Icons.BROKEN_IMAGE, size=40)) if contestant.image_path else ft.Column([ft.Icon(ft.Icons.IMAGE_NOT_SUPPORTED, size=50, color="grey"), ft.Text("No Img", color="grey", size=12)], alignment="center", spacing=2)
 
             return ft.Container(
-                width=320 if set_fixed_width else None, 
-                bgcolor=ft.Colors.WHITE,
-                border=ft.border.all(1, border_color),
-                border_radius=12,
-                shadow=ft.BoxShadow(blur_radius=4, color=ft.Colors.GREY_300),
-                content=ft.Column([
-                    ft.Container(
-                        aspect_ratio=16/9, 
-                        width=float("inf"), 
-                        bgcolor=ft.Colors.GREY_300,
-                        alignment=ft.alignment.center,
-                        border_radius=ft.border_radius.only(top_left=12, top_right=12),
-                        content=ft.Column([
-                            ft.Icon(ft.Icons.IMAGE_NOT_SUPPORTED, size=40, color="grey"), 
-                            ft.Text("No Image", color="grey")
-                        ], alignment=ft.MainAxisAlignment.CENTER, spacing=2)
-                    ),
-                    ft.Container(
-                        padding=15,
-                        content=ft.Column([
-                            ft.Row([
-                                ft.Container(content=ft.Text(f"#{contestant.candidate_number}", weight="bold", color="white"), bgcolor="black", padding=5, border_radius=5),
-                                ft.Text(contestant.name, weight="bold", size=16, expand=True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                            ]),
-                            ft.Divider(height=15),
-                            inputs_column,
-                            ft.Container(height=10),
-                            save_btn
-                        ])
-                    )
-                ], spacing=0)
+                width=500, bgcolor="white", border=ft.border.all(1, border_col), border_radius=10, padding=15, shadow=ft.BoxShadow(blur_radius=2, color="grey"),
+                content=ft.Row([
+                    ft.Container(width=180, height=240, bgcolor=ft.Colors.GREY_200, border_radius=5, alignment=ft.alignment.center, clip_behavior=ft.ClipBehavior.HARD_EDGE, content=img_content),
+                    ft.Container(expand=True, content=ft.Column([
+                        ft.Row([ft.Container(content=ft.Text(f"#{contestant.candidate_number}", weight="bold", color="white", size=16), bgcolor="black", padding=5, border_radius=4), ft.Text(contestant.name, weight="bold", size=18, expand=True, max_lines=2, overflow="ellipsis")], alignment="start", vertical_alignment="start"),
+                        ft.Divider(height=10, color="transparent"), inputs_column, ft.Container(height=10), save_btn
+                    ]))
+                ], alignment="start", vertical_alignment="start")
             )
 
-        # 5. ASSEMBLY
         rebuild_view(0)
-
-        # Top Control Bar (Unified Row)
-        top_bar = ft.Container(
-            padding=10,
-            content=ft.Row([
-                ft.Row([
-                    ft.IconButton(icon=ft.Icons.ARROW_BACK, on_click=lambda e: load_event_selector()),
-                    segment_title,
-                ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                
-                ft.Row([
-                    gender_selector 
-                ])
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN) 
-        )
-
-        main_container.content = ft.Column([
-            top_bar,
-            ft.Divider(height=1),
-            content_area
-        ], expand=True)
+        top_bar = ft.Container(padding=10, content=ft.Row([
+            ft.Row([ft.IconButton(icon=ft.Icons.ARROW_BACK, on_click=lambda e: load_event_selector()), ft.Text("Segment:", size=16, weight="bold"), segment_title]),
+            ft.Row([refresh_btn, gender_selector])
+        ], alignment="spaceBetween"))
+        main_container.content = ft.Column([top_bar, ft.Divider(height=1), content_area], expand=True)
         page.update()
 
     load_event_selector()
-
     return ft.Column([header, main_container], expand=True)

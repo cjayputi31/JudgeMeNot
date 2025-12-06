@@ -21,7 +21,7 @@ def main(page: ft.Page):
     page.window.width = 1280
     page.window.height = 720
     page.window.center() # Centers the window on screen start
-    
+
     auth_service = AuthService()
 
     def route_change(route):

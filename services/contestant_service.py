@@ -2,31 +2,26 @@ from sqlalchemy.orm import Session
 from core.database import SessionLocal
 from models.all_models import Contestant
 
-# NOTE: Do NOT import ContestantService here. It is defined below.
-
 class ContestantService:
-    def add_contestant(self, event_id, number, name, gender=None):
-        """
-        Adds a candidate.
-        number: Integer (e.g., 1 for Candidate #1)
-        gender: Optional (for Pageants)
-        """
-        db: Session = SessionLocal()
+    def add_contestant(self, event_id, number, name, gender, image_path=None):
+        db = SessionLocal()
         try:
-            # Check for duplicate number in this event
+            # FIX: Check duplicate for specific GENDER only
             exists = db.query(Contestant).filter(
                 Contestant.event_id == event_id, 
-                Contestant.candidate_number == number
+                Contestant.candidate_number == number,
+                Contestant.gender == gender # Allow Male 1 & Female 1
             ).first()
             
             if exists:
-                return False, f"Candidate #{number} already exists."
+                return False, f"Candidate #{number} ({gender}) already exists."
 
             new_c = Contestant(
                 event_id=event_id,
                 candidate_number=number,
                 name=name,
-                gender=gender
+                gender=gender,
+                image_path=image_path
             )
             db.add(new_c)
             db.commit()
@@ -36,27 +31,24 @@ class ContestantService:
         finally:
             db.close()
 
-    def get_contestants(self, event_id, active_only=True):
+    def get_contestants(self, event_id, active_only=False):
         db = SessionLocal()
         try:
             query = db.query(Contestant).filter(Contestant.event_id == event_id)
-            
-            # If active_only is True, filter out eliminated
             if active_only:
                 query = query.filter(Contestant.status == 'Active')
-                
             return query.order_by(Contestant.candidate_number).all()
         finally:
             db.close()
 
     def delete_contestant(self, contestant_id):
-        db: Session = SessionLocal()
+        db = SessionLocal()
         try:
             c = db.query(Contestant).get(contestant_id)
             if c:
                 db.delete(c)
                 db.commit()
-                return True, "Contestant deleted."
+                return True, "Deleted."
             return False, "Not found."
         except Exception as e:
             return False, str(e)
