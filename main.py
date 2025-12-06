@@ -1,4 +1,5 @@
 import flet as ft
+import socket # Required for IP detection
 from services.auth_service import AuthService
 from views.login_view import LoginView
 from views.admin_dashboard import AdminDashboardView
@@ -125,5 +126,31 @@ def main(page: ft.Page):
     page.on_view_pop = view_pop
     page.go(page.route)
 
+# --- HELPER: GET LOCAL IP ---
+def get_local_ip():
+    """
+    Connects to a public DNS (8.8.8.8) to determine the best local IP 
+    interface used by the OS. It doesn't actually send data.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('8.8.8.8', 1))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
+
 if __name__ == "__main__":
-    ft.app(target=main, view=ft.AppView.WEB_BROWSER, port=8550, host="0.0.0.0")
+    my_ip = get_local_ip()
+    port = 8550
+    print(f"--------------------------------------------------")
+    print(f"🚀  JUDGE ME NOT SYSTEM IS RUNNING!")
+    print(f"📱  Judges connect here: http://{my_ip}:{port}")
+    print(f"💻  Local Access:        http://127.0.0.1:{port}")
+    print(f"--------------------------------------------------")
+    
+    # We pass '0.0.0.0' to host to bind to ALL interfaces, 
+    # but we print the specific IP above for user convenience.
+    ft.app(target=main, view=ft.AppView.WEB_BROWSER, port=port, host=my_ip)
