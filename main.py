@@ -10,13 +10,13 @@ def main(page: ft.Page):
     page.title = "JudgeMeNot System"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.assets_dir = "assets"
-    
+
     # --- WINDOW SETTINGS (FIXED FOR FLET 0.28+) ---
     # These properties must be set on the 'page.window' object
     page.window.min_width = 900
     page.window.min_height = 675
     page.update()
-    
+
     # Optional: Set a nice starting size
     page.window.width = 1280
     page.window.height = 720
@@ -26,7 +26,7 @@ def main(page: ft.Page):
 
     def route_change(route):
         page.views.clear()
-        
+
         user_id = page.session.get("user_id")
         user_role = page.session.get("user_role")
 
@@ -56,7 +56,7 @@ def main(page: ft.Page):
             else:
                 print("⛔ Access Denied: Admin Dashboard")
                 page.go("/login")
-        
+
         # --- ROUTE: EVENT CONFIGURATION ---
         elif page.route.startswith("/admin/event/"):
             if user_id and user_role == "Admin": 
@@ -108,7 +108,7 @@ def main(page: ft.Page):
         page.session.set("user_id", user.id)
         page.session.set("user_role", user.role)
         page.session.set("user_name", user.name)
-        
+
         if user.role == "Admin":
             page.go("/admin")
         elif user.role == "Judge":
@@ -150,7 +150,9 @@ if __name__ == "__main__":
     print(f"📱  Judges connect here: http://{my_ip}:{port}")
     print(f"💻  Local Access:        http://127.0.0.1:{port}")
     print(f"--------------------------------------------------")
-    
+
     # We pass '0.0.0.0' to host to bind to ALL interfaces, 
     # but we print the specific IP above for user convenience.
-    ft.app(target=main, view=ft.AppView.WEB_BROWSER, port=port, host=my_ip)
+
+    # ft.app(target=main, view=ft.AppView.WEB_BROWSER, port=port, host=my_ip)
+    ft.app(target=main)
