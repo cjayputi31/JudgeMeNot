@@ -1,22 +1,14 @@
 import flet as ft
 from services.pageant_service import PageantService
-from services.event_service import EventService # <--- NEW IMPORT
 from services.contestant_service import ContestantService
-from services.event_service import EventService
 import time, threading
 from datetime import datetime
 
 def JudgeView(page: ft.Page, on_logout_callback):
     # Services
     pageant_service = PageantService()
-    event_service = EventService() # <--- NEW INSTANCE
     contestant_service = ContestantService()
-<<<<<<< HEAD
 
-=======
-    event_service = EventService()
-    
->>>>>>> b1be397 (added event activation and deactivation)
     # Session Data
     judge_id = page.session.get("user_id")
     judge_name = page.session.get("user_name")
@@ -53,8 +45,7 @@ def JudgeView(page: ft.Page, on_logout_callback):
     def poll_active_segment():
         while is_polling and current_event:
             try:
-                # Use EventService for segment status
-                active_seg_db = event_service.get_active_segment(current_event.id)
+                active_seg_db = pageant_service.get_active_segment(current_event.id)
                 try:
                     new_seg_id = active_seg_db.id if active_seg_db else None
                 except:
@@ -62,11 +53,10 @@ def JudgeView(page: ft.Page, on_logout_callback):
 
                 current_seg_id = selected_segment['segment'].id if selected_segment else None
 
+                now = datetime.now().strftime("%H:%M:%S")
                 if last_check_text.page:
-                    now = datetime.now().strftime("%H:%M:%S")
                     last_check_text.value = f"Last checked: {now}"
-                    try:
-                        last_check_text.update()
+                    try: last_check_text.update()
                     except: pass 
 
                 if new_seg_id != current_seg_id:
@@ -81,7 +71,6 @@ def JudgeView(page: ft.Page, on_logout_callback):
     # ---------------------------------------------------------
     # 1. HEADER & GLOBAL SUBMIT
     # ---------------------------------------------------------
-
     def show_waiting_room(title, msg):
         start_polling() 
         content = ft.Column([
@@ -141,7 +130,6 @@ def JudgeView(page: ft.Page, on_logout_callback):
 
         def confirm_submission(e):
             page.close(confirm_dlg)
-            # Use PageantService for marking progress (scoring logic)
             pageant_service.mark_judge_finished(judge_id, selected_segment['segment'].id)
             show_waiting_room("Scores Submitted!", "Waiting for next segment...")
 
@@ -170,44 +158,10 @@ def JudgeView(page: ft.Page, on_logout_callback):
     # ---------------------------------------------------------
     def load_event_selector():
         stop_polling()
-<<<<<<< HEAD
-        events = event_service.get_judge_events(judge_id)
-        
-        if not events:
-            main_container.content = ft.Column([
-                ft.Icon(ft.Icons.EVENT_BUSY, size=60, color="grey"),
-                ft.Text("No events assigned to you.", size=20, color="grey"),
-                ft.Text("Please contact the Admin.", color="grey"),
-=======
-        # Disable button when leaving dashboard
-        submit_all_btn.disabled = True
-        if submit_all_btn.page:
-            submit_all_btn.update()
-        
-        # 1. Fetch Assigned Events
-        events = event_service.get_judge_events(judge_id)
-        
-        # 2. Handle Empty State (The Fix You Asked For)
-        if not events:
-            main_container.content = ft.Column([
-                ft.Icon(ft.Icons.EVENT_BUSY, size=60, color="grey"),
-                ft.Text("No active events found.", size=20, weight="bold", color="grey"),
-                ft.Text("Please wait for the Admin to start an event.", size=14, color="grey"),
-                ft.Container(height=20),
-                ft.ElevatedButton("Refresh List", icon=ft.Icons.REFRESH, on_click=lambda e: load_event_selector())
->>>>>>> b1be397 (added event activation and deactivation)
-            ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-            page.update()
-            return
-
-<<<<<<< HEAD
-=======
-        # 3. Build Grid if events exist
->>>>>>> b1be397 (added event activation and deactivation)
+        events = pageant_service.get_active_pageants()
         grid = ft.GridView(expand=True, max_extent=300, spacing=20, run_spacing=20)
 
         for e in events:
-<<<<<<< HEAD
             grid.controls.append(ft.Container(
                 bgcolor="white", border_radius=15, padding=20, shadow=ft.BoxShadow(blur_radius=10, color="grey"),
                 content=ft.Column([
@@ -220,56 +174,24 @@ def JudgeView(page: ft.Page, on_logout_callback):
             ))
 
         main_container.content = ft.Column([ft.Text("Select Active Event", size=24, weight="bold"), ft.Divider(), grid], expand=True)
-=======
-            grid.controls.append(
-                ft.Container(
-                    bgcolor=ft.Colors.WHITE,
-                    border=ft.border.all(1, ft.Colors.BLUE_100),
-                    border_radius=15,
-                    padding=20,
-                    shadow=ft.BoxShadow(blur_radius=10, color=ft.Colors.BLUE_GREY_100),
-                    content=ft.Column([
-                        ft.Icon(ft.Icons.STAR_ROUNDED, size=50, color=ft.Colors.ORANGE),
-                        ft.Text(e.name, weight="bold", size=18, text_align="center"),
-                        ft.Text(f"Status: {e.status}", color="green"),
-                        ft.ElevatedButton("Start Judging", on_click=lambda x, ev=e: enter_scoring_dashboard(ev))
-                    ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                    on_click=lambda x, ev=e: enter_scoring_dashboard(ev)
-                )
-            )
-        
-        main_container.content = ft.Column([
-            ft.Text("Select Active Event", size=24, weight="bold"),
-            ft.Divider(),
-            grid
-        ], expand=True)
->>>>>>> b1be397 (added event activation and deactivation)
         page.update()
 
     def enter_scoring_dashboard(event):
         nonlocal current_event, selected_segment
-
-        # SECURITY CHECK (The Fix for Bug #2)
-        if not event_service.is_judge_assigned(judge_id, event.id):
-            page.open(ft.SnackBar(ft.Text("Access Denied: You are not assigned to this event."), bgcolor="red"))
-            return
-        
         current_event = event
-        # Use EventService
-        active_seg = event_service.get_active_segment(current_event.id)
+
+        active_seg = pageant_service.get_active_segment(current_event.id)
 
         if not active_seg:
             selected_segment = None
             show_waiting_room("Waiting for Admin...", "No segment is currently active.")
             return
 
-        # Use PageantService for checking finish status
         if pageant_service.has_judge_finished(judge_id, active_seg.id):
             selected_segment = {'segment': active_seg} 
             show_waiting_room("Scores Submitted!", "You have already scored this segment.")
             return
 
-        # Use PageantService for structure (Scoring related)
         structure = pageant_service.get_event_structure(current_event.id)
         target_struct = next((s for s in structure if s['segment'].id == active_seg.id), None)
 
@@ -280,9 +202,6 @@ def JudgeView(page: ft.Page, on_logout_callback):
         else:
             page.open(ft.SnackBar(ft.Text("Error loading data"), bgcolor="red"))
 
-    # ---------------------------------------------------------
-    # 3. RENDER DASHBOARD
-    # ---------------------------------------------------------
     def render_dashboard(structure_item):
         segment_title = ft.Text(f"{structure_item['segment'].name}", size=20, weight="bold", color=ft.Colors.BLUE_800)
         refresh_btn = ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Force Refresh", on_click=lambda e: enter_scoring_dashboard(current_event))
@@ -312,9 +231,9 @@ def JudgeView(page: ft.Page, on_logout_callback):
                 return res
 
             if tab_index == 0: 
-                header_male = ft.Container(content=ft.Text("Male Candidates", weight="bold", color="blue"), bgcolor=ft.Colors.BLUE_50, padding=10, border_radius=5, alignment=ft.alignment.center, width=500)
+                header_male = ft.Container(content=ft.Text("Male Candidates", weight="bold", color=ft.Colors.BLUE), bgcolor=ft.Colors.BLUE_50, padding=10, border_radius=5, alignment=ft.alignment.center, width=500)
                 list_male = ft.Column(controls=get_cards("Male"), expand=True, scroll="hidden", spacing=15, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-                header_female = ft.Container(content=ft.Text("Female Candidates", weight="bold", color="pink"), bgcolor=ft.Colors.PINK_50, padding=10, border_radius=5, alignment=ft.alignment.center, width=500)
+                header_female = ft.Container(content=ft.Text("Female Candidates", weight="bold", color=ft.Colors.PINK), bgcolor=ft.Colors.PINK_50, padding=10, border_radius=5, alignment=ft.alignment.center, width=500)
                 list_female = ft.Column(controls=get_cards("Female"), expand=True, scroll="hidden", spacing=15, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
                 content_area.content = ft.Row([ft.Column([header_male, list_male], expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER), ft.VerticalDivider(width=1), ft.Column([header_female, list_female], expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)], expand=True)
             else: 
@@ -323,7 +242,7 @@ def JudgeView(page: ft.Page, on_logout_callback):
                 if not cards:
                     content_area.content = ft.Column([ft.Icon(ft.Icons.SEARCH_OFF, size=50, color="grey"), ft.Text("No candidates found.", color="grey")], alignment="center", horizontal_alignment="center", expand=True)
                 else:
-                    content_area.content = ft.Column([ft.Row(controls=cards, wrap=True, alignment="center", spacing=20)], scroll="adaptive", expand=True)
+                    content_area.content = ft.Column([ft.Row(controls=cards, wrap=True, alignment=ft.MainAxisAlignment.CENTER, spacing=20)], scroll="adaptive", expand=True)
 
             page.update()
 
@@ -369,11 +288,11 @@ def JudgeView(page: ft.Page, on_logout_callback):
                 val = existing_scores.get(crit.id, "")
                 tf = ft.TextField(value=str(val) if val!="" else "", width=70, height=30, text_size=14, content_padding=5, text_align="center", on_change=on_input_change)
                 local_inputs[crit.id] = {"field": tf, "max": crit.max_score}
-                inputs_column.controls.append(ft.Row([
-                    ft.Text(crit.name, size=14, weight="bold", expand=True, max_lines=1, overflow="ellipsis"), 
-                    ft.Text(f"/{int(crit.max_score)} ({int(crit.weight * 100)}%)", size=11, color="grey"), 
-                    tf
-                ], alignment="spaceBetween"))
+                
+                # FIXED LABEL: /100 (50%)
+                label_text = f"/{int(crit.max_score)} ({int(crit.weight * 100)}%)"
+                
+                inputs_column.controls.append(ft.Row([ft.Text(crit.name, size=14, weight="bold", expand=True, max_lines=1, overflow="ellipsis"), ft.Text(label_text, size=11, color="grey"), tf], alignment="spaceBetween"))
 
             save_btn = ft.ElevatedButton(content=ft.Text("Lock & Save", color="white", size=14), bgcolor=ft.Colors.BLUE, width=float("inf"), height=40, on_click=toggle_lock)
             def get_locked_status(): return is_locked

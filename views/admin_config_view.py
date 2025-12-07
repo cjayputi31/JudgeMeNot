@@ -1,8 +1,11 @@
 import flet as ft
+import shutil
 import os
+import time
 from services.pageant_service import PageantService
 from services.event_service import EventService
 from services.contestant_service import ContestantService 
+from services.export_service import ExportService 
 from core.database import SessionLocal
 from models.all_models import Event, Segment, Criteria, EventJudge
 
@@ -11,8 +14,8 @@ def AdminConfigView(page: ft.Page, event_id: int):
     pageant_service = PageantService()
     event_service = EventService()
     contestant_service = ContestantService() 
+    export_service = ExportService()
 
-    # Only needed for dropdown list
     from services.admin_service import AdminService
     admin_service = AdminService()
 
@@ -21,32 +24,85 @@ def AdminConfigView(page: ft.Page, event_id: int):
     uploaded_file_path = None 
 
     # ---------------------------------------------------------
-    # 1. FILE PICKER SETUP
+    # 1. FILE PICKER SETUP (DESKTOP MODE)
     # ---------------------------------------------------------
-    def on_upload_complete(e: ft.FilePickerUploadEvent):
-        nonlocal uploaded_file_path
-        if e.error:
-            page.open(ft.SnackBar(ft.Text(f"Upload Error: {e.error}"), bgcolor="red"))
-            return
-
-        uploaded_file_path = f"uploads/{e.file_name}"
-        img_preview.src = uploaded_file_path
-        img_preview.visible = True
-        img_preview.update()
-
-        upload_btn.text = "Change Photo"
-        upload_btn.update()
-        page.open(ft.SnackBar(ft.Text("Photo uploaded successfully!"), bgcolor="green"))
-
+   
     def on_file_picked(e: ft.FilePickerResultEvent):
+        nonlocal uploaded_file_path
         if e.files:
             file_obj = e.files[0]
-            os.makedirs("assets/uploads", exist_ok=True)
-            upload_url = page.get_upload_url(file_obj.name, 600)
-            file_picker.upload([ft.FilePickerUploadFile(name=file_obj.name, upload_url=upload_url)])
+            
+            # Check if we have a valid path (Desktop Mode)
+            if file_obj.path:
+                try:
+                    # Create assets/uploads folder
+                    os.makedirs("assets/uploads", exist_ok=True)
+                    
+                    # Generate unique filename
+                    # Format: img_{timestamp}_{safe_name}
+                    safe_name = "".join(x for x in file_obj.name if x.isalnum() or x in "._-")
+                    new_filename = f"img_{int(time.time())}_{safe_name}"
+                    dest_path = os.path.join("assets/uploads", new_filename)
+                    
+                    # COPY file locally
+                    shutil.copy(file_obj.path, dest_path)
+                    
+                    # Store relative path for DB
+                    uploaded_file_path = f"uploads/{new_filename}"
+                    
+                    # Update UI
+                    img_preview.src = uploaded_file_path
+                    img_preview.visible = True
+                    img_preview.update()
+                    
+                    upload_btn.text = "Photo Selected"
+                    upload_btn.icon = ft.Icons.CHECK
+                    upload_btn.update()
+                    
+                    page.open(ft.SnackBar(ft.Text("Photo loaded successfully!"), bgcolor="green"))
+                    
+                except Exception as ex:
+                    page.open(ft.SnackBar(ft.Text(f"Error saving file: {ex}"), bgcolor="red"))
+            else:
+                # Fallback for Web Mode (Warning)
+                page.open(ft.SnackBar(ft.Text("Browser Mode detected: Cannot upload files directly. Please run 'main.py' as a Desktop App."), bgcolor="orange"))
 
-    file_picker = ft.FilePicker(on_result=on_file_picked, on_upload=on_upload_complete)
+    file_picker = ft.FilePicker(on_result=on_file_picked)
     page.overlay.append(file_picker)
+
+    # --- EXPORT PICKER ---
+    def on_save_result(e: ft.FilePickerResultEvent):
+        if e.path:
+            scope_val = export_scope.value
+            fmt = export_format.value
+
+            if scope_val == "OVERALL":
+                data = pageant_service.get_overall_breakdown(event_id)
+                mode = "overall"
+                title = "OVERALL TALLY SHEET"
+            else:
+                seg_id = int(scope_val)
+                data = pageant_service.get_segment_tabulation(event_id, seg_id)
+                mode = "segment"
+            
+                seg_name = next((opt.text for opt in export_scope.options if opt.key == scope_val), "Segment")
+                title = f"SCORE SHEET: {seg_name.upper()}"
+
+            try:
+                if fmt == "excel":
+                    export_service.generate_excel(e.path, current_event.name, title, data, mode)
+                else:
+                    export_service.generate_pdf(e.path, current_event.name, title, data, mode)
+
+                page.open(ft.SnackBar(ft.Text("Export Successful!"), bgcolor="green"))
+                page.close(export_dialog)
+            except Exception as ex:
+                page.open(ft.SnackBar(ft.Text(f"Export Failed: {ex}"), bgcolor="red"))
+
+    save_file_picker = ft.FilePicker(on_result=on_save_result)
+    
+
+    page.overlay.append(save_file_picker)
 
     def get_event_details():
         db = SessionLocal()
@@ -76,9 +132,11 @@ def AdminConfigView(page: ft.Page, event_id: int):
         c_number.value = ""
         c_name.value = ""
         uploaded_file_path = None
+        
         img_preview.visible = False
         img_preview.src = ""
         upload_btn.text = "Upload Photo"
+        upload_btn.icon = ft.Icons.UPLOAD
         page.open(add_c_dialog)
 
     def save_contestant(e):
@@ -121,10 +179,11 @@ def AdminConfigView(page: ft.Page, event_id: int):
                 border_radius=10,
                 content=ft.Row([
                     ft.Row([
+                        # FIX: ALWAYS SHOW ICON IN ADMIN LIST
                         ft.Container(
                             width=40, height=40, border_radius=20,
-                            content=ft.Image(src=c.image_path, fit=ft.ImageFit.COVER) if c.image_path else ft.Icon(icon, color="white"),
-                            bgcolor="grey" if not c.image_path else None,
+                            content=ft.Icon(icon, color="white"), # <--- Always Icon
+                            bgcolor="grey",
                             alignment=ft.alignment.center,
                             clip_behavior=ft.ClipBehavior.HARD_EDGE
                         ),
@@ -293,31 +352,27 @@ def AdminConfigView(page: ft.Page, event_id: int):
         limit = seg.qualifier_limit
         db.close()
 
-        # 1. Get Rankings (Dictionary now)
         rankings = pageant_service.get_preliminary_rankings(event_id)
-
-        # 2. Build Lists
         qualifiers_controls = []
         eliminated_controls = []
 
-        def build_gender_list(gender_rankings, gender_name):
-            if not gender_rankings: return
-            qualifiers_controls.append(ft.Text(f"--- {gender_name} ---", weight="bold", color="blue"))
-            eliminated_controls.append(ft.Text(f"--- {gender_name} ---", weight="bold", color="blue"))
+        def build_list(rank_list, title):
+            if rank_list:
+                qualifiers_controls.append(ft.Text(f"--- {title} ---", color="blue", weight="bold"))
+                eliminated_controls.append(ft.Text(f"--- {title} ---", color="blue", weight="bold"))
+                for i, r in enumerate(rank_list):
+                    rank = i + 1
+                    line = f"#{rank} {r['contestant'].name} ({r['score']}%)"
+                    if i < limit:
+                        qualifiers_controls.append(ft.Text(line, weight="bold", color="green"))
+                    else:
+                        eliminated_controls.append(ft.Text(line, color="grey"))
 
-            for i, r in enumerate(gender_rankings):
-                rank = i + 1
-                line = f"#{rank} {r['contestant'].name} ({r['score']}%)"
-                if i < limit:
-                    qualifiers_controls.append(ft.Text(line, weight="bold", color="green"))
-                else:
-                    eliminated_controls.append(ft.Text(line, color="grey"))
-
-        build_gender_list(rankings['Male'], "MALE")
-        build_gender_list(rankings['Female'], "FEMALE")
+        build_list(rankings['Male'], "MALE")
+        build_list(rankings['Female'], "FEMALE")
 
         if not qualifiers_controls:
-             qualifiers_controls.append(ft.Text("No scores recorded yet.", italic=True))
+            qualifiers_controls.append(ft.Text("No scores recorded yet.", italic=True, color="orange"))
 
         final_confirm_input.value = ""
         final_confirm_input.on_change = validate_final_input
@@ -327,7 +382,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
         dlg = ft.AlertDialog(
             title=ft.Text("FINAL ROUND ACTIVATION"),
             content=ft.Column([
-                ft.Text(f"Eliminating candidates below Rank {limit} (Per Gender).", color="red", weight="bold"),
+                ft.Text(f"Activating this will ELIMINATE candidates below Rank {limit}.", color="red", weight="bold"),
                 ft.Divider(),
                 ft.Text(f"QUALIFIERS (Top {limit}):", weight="bold"),
                 ft.Column(controls=qualifiers_controls, spacing=2), 
@@ -343,6 +398,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
                 final_confirm_btn
             ]
         )
+
         final_confirm_btn.on_click = lambda e: execute_final_activation(seg_id, limit, dlg)
         page.open(dlg)
 
@@ -565,7 +621,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
         page.open(crit_dialog)
 
     # ---------------------------------------------------------
-    # 5. JUDGE ASSIGNMENT TAB (UPDATED: DIALOG)
+    # 5. JUDGE ASSIGNMENT TAB
     # ---------------------------------------------------------
     j_select = ft.Dropdown(label="Select Judge", width=300)
     j_is_chairman = ft.Checkbox(label="Is Chairman?", value=False)
@@ -573,7 +629,6 @@ def AdminConfigView(page: ft.Page, event_id: int):
     def load_judge_options():
         all_judges = admin_service.get_all_judges()
         j_select.options = [ft.dropdown.Option(text=j.name, key=str(j.id)) for j in all_judges]
-        # j_select.update() <-- REMOVED to avoid error
 
     def add_judge_click(e):
         if not j_select.value:
@@ -583,12 +638,11 @@ def AdminConfigView(page: ft.Page, event_id: int):
         success, msg = event_service.assign_judge(event_id, judge_id, j_is_chairman.value)
         if success:
             page.open(ft.SnackBar(ft.Text(msg), bgcolor="green"))
-            page.close(assign_judge_dialog) # Close dialog
+            page.close(assign_judge_dialog) 
             refresh_ui()
         else:
             page.open(ft.SnackBar(ft.Text(f"Error: {msg}"), bgcolor="red"))
 
-    # Define Dialog
     assign_judge_dialog = ft.AlertDialog(
         title=ft.Text("Assign Judge"),
         content=ft.Column([
@@ -602,10 +656,9 @@ def AdminConfigView(page: ft.Page, event_id: int):
     )
 
     def open_assign_judge_dialog(e):
-        # Reset fields
         j_select.value = None
         j_is_chairman.value = False
-        load_judge_options() # Load options when opening
+        load_judge_options() 
         page.open(assign_judge_dialog)
 
     def remove_judge_click(e):
@@ -618,7 +671,7 @@ def AdminConfigView(page: ft.Page, event_id: int):
     def render_judges_tab():
         assigned = event_service.get_assigned_judges(event_id)
 
-        list_column = ft.Column(spacing=10, scroll="adaptive", expand=True) # Scrollable list
+        list_column = ft.Column(spacing=10, scroll="adaptive", expand=True) 
 
         for entry in assigned:
             role_text = "Chairman" if entry.is_chairman else "Judge"
@@ -653,24 +706,106 @@ def AdminConfigView(page: ft.Page, event_id: int):
             ], expand=True)
         )
 
-     # 6. TABULATION & RESULTS TAB (REVAMPED)
     # ---------------------------------------------------------
+    # 6. EXPORT & TABULATION
+    # ---------------------------------------------------------
+    export_format = ft.RadioGroup(content=ft.Row([
+        ft.Radio(value="pdf", label="PDF (with Signatures)"),
+        ft.Radio(value="excel", label="Excel Spreadsheet")
+    ]), value="pdf")
+
+    export_scope = ft.Dropdown(label="Select Scope", width=300)
+
+    def on_save_result(e: ft.FilePickerResultEvent):
+        if e.path:
+            scope_val = export_scope.value
+            fmt = export_format.value
+
+            if scope_val == "OVERALL":
+                data = pageant_service.get_overall_breakdown(event_id)
+                mode = "overall"
+                title = "OVERALL TALLY SHEET"
+            else:
+                seg_id = int(scope_val)
+                data = pageant_service.get_segment_tabulation(event_id, seg_id)
+                mode = "segment"
+                seg_name = next((opt.text for opt in export_scope.options if opt.key == scope_val), "Segment")
+                title = f"SCORE SHEET: {seg_name.upper()}"
+
+            try:
+                if fmt == "excel":
+                    export_service.generate_excel(e.path, current_event.name, title, data, mode)
+                else:
+                    export_service.generate_pdf(e.path, current_event.name, title, data, mode)
+
+                page.open(ft.SnackBar(ft.Text("Export Successful!"), bgcolor="green"))
+                page.close(export_dialog)
+            except Exception as ex:
+                page.open(ft.SnackBar(ft.Text(f"Export Failed: {ex}"), bgcolor="red"))
+
+    save_file_picker = ft.FilePicker(on_result=on_save_result)
+    page.overlay.append(save_file_picker)
+
+    def initiate_export(e):
+        if not export_scope.value:
+            page.open(ft.SnackBar(ft.Text("Please select what to export"), bgcolor="red"))
+            return
+
+        scope_key = export_scope.value
+        scope_name = "Overall"
+        if scope_key != "OVERALL":
+            for opt in export_scope.options:
+                if opt.key == scope_key:
+                    scope_name = opt.text
+                    break
+        
+        safe_name = scope_name.replace(" ", "_")
+        ext = "xlsx" if export_format.value == "excel" else "pdf"
+        fname = f"{current_event.name}_{safe_name}.{ext}"
+
+        save_file_picker.save_file(dialog_title="Save Score Sheet", file_name=fname)
+
+    export_dialog = ft.AlertDialog(
+        title=ft.Text("Export Scores"),
+        content=ft.Column([
+            ft.Text("Select Data Source:"),
+            export_scope,
+            ft.Divider(),
+            ft.Text("Select Format:"),
+            export_format
+        ], height=200, width=350, tight=True),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda e: page.close(export_dialog)),
+            ft.ElevatedButton("Export", icon=ft.Icons.DOWNLOAD, on_click=initiate_export)
+        ]
+    )
+
+    def open_export_dialog(e):
+        db = SessionLocal()
+        segments = db.query(Segment).filter(Segment.event_id == event_id).order_by(Segment.order_index).all()
+        db.close()
+
+        opts = [ft.dropdown.Option(key="OVERALL", text="Overall Tally")]
+        for s in segments:
+            opts.append(ft.dropdown.Option(key=str(s.id), text=s.name))
+
+        export_scope.options = opts
+        export_scope.value = "OVERALL"
+        page.open(export_dialog)
+
     def render_scores_tab():
         db = SessionLocal()
         segments = db.query(Segment).filter(Segment.event_id == event_id).order_by(Segment.order_index).all()
         db.close()
-         # Helper: Build Table for a Segment (Columns = Judges)
+
         def build_segment_table(gender_data, judges, title, color):
             cols = [
                 ft.DataColumn(ft.Text("Rank"), numeric=True),
                 ft.DataColumn(ft.Text("#"), numeric=True),
                 ft.DataColumn(ft.Text("Candidate")),
             ]
-            
-            # Show Full Judge Names
             for j_name in judges:
                 cols.append(ft.DataColumn(ft.Text(j_name, size=12, weight="bold"), numeric=True))
-            
             cols.append(ft.DataColumn(ft.Text("Average"), numeric=True))
 
             rows = []
@@ -682,7 +817,6 @@ def AdminConfigView(page: ft.Page, event_id: int):
                 ]
                 for score in r['scores']:
                     cells.append(ft.DataCell(ft.Text(str(score))))
-                
                 cells.append(ft.DataCell(ft.Text(str(r['total']), weight="bold", color="green")))
                 rows.append(ft.DataRow(cells=cells))
 
@@ -691,18 +825,14 @@ def AdminConfigView(page: ft.Page, event_id: int):
                 ft.DataTable(columns=cols, rows=rows, column_spacing=20, heading_row_height=40)
             ], expand=True, scroll="adaptive")
 
-        # Helper: Build Table for Overall (Columns = Segments)
         def build_overall_table(gender_data, segment_names, title, color):
             cols = [
                 ft.DataColumn(ft.Text("Rank"), numeric=True),
                 ft.DataColumn(ft.Text("#"), numeric=True),
                 ft.DataColumn(ft.Text("Candidate")),
             ]
-            
-            # Show Segment Names
             for seg_name in segment_names:
                 cols.append(ft.DataColumn(ft.Text(seg_name, size=12, weight="bold"), numeric=True))
-            
             cols.append(ft.DataColumn(ft.Text("Total %"), numeric=True))
 
             rows = []
@@ -714,53 +844,30 @@ def AdminConfigView(page: ft.Page, event_id: int):
                 ]
                 for score in r['segment_scores']:
                     cells.append(ft.DataCell(ft.Text(str(score))))
-                
                 cells.append(ft.DataCell(ft.Text(str(r['total']), weight="bold", color="green")))
                 rows.append(ft.DataRow(cells=cells))
 
             return ft.Column([
                 ft.Container(content=ft.Text(title, weight="bold", color="white"), bgcolor=color, padding=10, border_radius=5, alignment=ft.alignment.center, width=float("inf")),
-                ft.DataTable(columns=cols, rows=rows, column_spacing=20, heading_row_height=40, width=float("inf")) # Full width
+                ft.DataTable(columns=cols, rows=rows, column_spacing=20, heading_row_height=40, width=float("inf"))
             ], expand=True, scroll="adaptive")
 
         def get_tab_content(seg_id=None):
             if seg_id is None:
-                # OVERALL: Use get_overall_breakdown
                 matrix = pageant_service.get_overall_breakdown(event_id)
                 seg_names = matrix['segments']
-                
-                # FULL WIDTH STACKED
                 male_table = build_overall_table(matrix['Male'], seg_names, "MALE OVERALL STANDING", ft.Colors.BLUE)
                 female_table = build_overall_table(matrix['Female'], seg_names, "FEMALE OVERALL STANDING", ft.Colors.PINK)
-                
-                return ft.Container(
-                    padding=10,
-                    content=ft.Column([
-                        male_table,
-                        ft.Divider(),
-                        female_table
-                    ], scroll="adaptive", expand=True)
-                )
+                return ft.Container(padding=10, content=ft.Column([male_table, ft.Divider(), female_table], scroll="adaptive", expand=True))
             else:
-                # SEGMENT: Use get_segment_tabulation (Judge Matrix)
                 matrix = pageant_service.get_segment_tabulation(event_id, seg_id)
                 judges = matrix['judges']
-                
-                # SIDE BY SIDE
                 male_col = build_segment_table(matrix['Male'], judges, "MALE RANKING", ft.Colors.BLUE)
                 female_col = build_segment_table(matrix['Female'], judges, "FEMALE RANKING", ft.Colors.PINK)
-                
-                return ft.Container(
-                    padding=10,
-                    content=ft.Row([
-                        male_col,
-                        ft.VerticalDivider(width=1),
-                        female_col
-                    ], expand=True)
-                )
+                return ft.Container(padding=10, content=ft.Row([male_col, ft.VerticalDivider(width=1), female_col], expand=True))
 
         score_tabs = [
-            ft.Tab(text="OVERALL TALLY", content=get_tab_content(None))
+            ft.Tab(text="OVERALL TALLY", icon=ft.Icons.ASSESSMENT, content=get_tab_content(None))
         ]
         for s in segments:
             score_tabs.append(ft.Tab(text=s.name.upper(), content=get_tab_content(s.id)))
@@ -772,12 +879,16 @@ def AdminConfigView(page: ft.Page, event_id: int):
                     padding=10,
                     content=ft.Row([
                         ft.Text("Live Tabulation Board", size=20, weight="bold"),
-                        ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Refresh Rankings", on_click=lambda e: refresh_ui())
+                        ft.Row([
+                            ft.IconButton(icon=ft.Icons.REFRESH, tooltip="Refresh Rankings", on_click=lambda e: refresh_ui()),
+                            ft.ElevatedButton("Export Scores", icon=ft.Icons.DOWNLOAD, on_click=open_export_dialog)
+                        ])
                     ], alignment="spaceBetween")
                 ),
                 ft.Tabs(tabs=score_tabs, animation_duration=300, expand=True, scrollable=True)
             ], expand=True)
         )
+
     # ---------------------------------------------------------
     # 7. QUIZ BEE (Minimal)
     # ---------------------------------------------------------
@@ -807,34 +918,12 @@ def AdminConfigView(page: ft.Page, event_id: int):
         if current_event.event_type == "Pageant": return render_pageant_ui()
         else: return render_quiz_ui()
 
-    tabs = ft.Tabs(
-        selected_index=0,
-        animation_duration=300,
-        tabs=[
-            ft.Tab(text="Configuration", icon=ft.Icons.SETTINGS, content=render_config_tab()),
-            ft.Tab(text="Contestants", icon=ft.Icons.PEOPLE, content=render_contestant_tab()),
-            ft.Tab(text="Judges", icon=ft.Icons.GAVEL, content=render_judges_tab()),
-            ft.Tab(text="Tabulation", icon=ft.Icons.LEADERBOARD, content=render_scores_tab()), 
-        ],
-        expand=True
-    )
+    tabs = ft.Tabs(selected_index=0, animation_duration=300, tabs=[
+        ft.Tab(text="Configuration", icon=ft.Icons.SETTINGS, content=render_config_tab()),
+        ft.Tab(text="Contestants", icon=ft.Icons.PEOPLE, content=render_contestant_tab()),
+        ft.Tab(text="Judges", icon=ft.Icons.GAVEL, content=render_judges_tab()),
+        ft.Tab(text="Tabulation", icon=ft.Icons.LEADERBOARD, content=render_scores_tab()), 
+    ], expand=True)
 
     def refresh_ui():
-        tabs.tabs[0].content = render_config_tab()
-        tabs.tabs[1].content = render_contestant_tab()
-        tabs.tabs[2].content = render_judges_tab()
-        tabs.tabs[3].content = render_scores_tab()
-        page.update()
-
-    return ft.Container(
-        content=ft.Column([
-            ft.Row([
-                ft.IconButton(icon=ft.Icons.ARROW_BACK, on_click=lambda e: page.go("/admin")),
-                ft.Text(f"Event: {current_event.name}", size=24, weight="bold")
-            ]),
-            ft.Divider(),
-            tabs
-        ], expand=True),
-        padding=20,
-        expand=True
-    )
+        tabs.tabs[0].content = render_config_tab(); tabs.tabs[1].content = render_contestant_tab(); tabs.tabs[2].content = render_judges_tab(); tabs.tabs[3].content = render_scores_tab(); page.update()
