@@ -161,4 +161,16 @@ def get_local_ip():
     return IP
 
 if __name__ == "__main__":
-   ft.app(target=main)
+    my_ip = get_local_ip()
+    port = 8550
+    print(f"--------------------------------------------------")
+    print(f"🚀  JUDGE ME NOT SYSTEM IS RUNNING!")
+    print(f"📱  Judges connect here: http://{my_ip}:{port}")
+    print(f"💻  Local Access:        http://127.0.0.1:{port}")
+    print(f"--------------------------------------------------")
+
+    # We pass '0.0.0.0' to host to bind to ALL interfaces, 
+    # but we print the specific IP above for user convenience.
+
+    ft.app(target=main, view=ft.AppView.WEB_BROWSER, port=port, host=my_ip)
+    # ft.app(target=main)
