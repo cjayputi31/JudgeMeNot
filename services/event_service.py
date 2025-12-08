@@ -1,7 +1,8 @@
-from sqlalchemy.orm import Session, joinedload # <--- Added joinedload
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from core.database import SessionLocal
-from models.all_models import Event, Segment, EventJudge, User, Contestant
+from models.all_models import Event, Segment, EventJudge, User, Contestant, AuditLog
+import datetime
 
 class EventService:
     # ---------------------------------------------------------
@@ -21,7 +22,6 @@ class EventService:
         """Returns ONLY events assigned to a specific judge that are Active"""
         db = SessionLocal()
         try:
-            # Join EventJudge to filter by judge_id
             return db.query(Event).join(EventJudge).filter(
                 EventJudge.judge_id == judge_id,
                 Event.status == 'Active'
@@ -50,7 +50,7 @@ class EventService:
             if not is_final:
                 current_total = db.query(func.sum(Segment.percentage_weight))\
                     .filter(Segment.event_id == event_id, Segment.is_final == False).scalar() or 0.0
-                
+
                 if (current_total + weight) > 1.0001:
                     return False, f"Prelim total exceeds 100%. Current: {int(current_total*100)}%, Adding: {int(weight*100)}%"
 
@@ -76,7 +76,7 @@ class EventService:
                 if not is_final:
                     current_total = db.query(func.sum(Segment.percentage_weight))\
                         .filter(Segment.event_id == seg.event_id, Segment.id != segment_id, Segment.is_final == False).scalar() or 0.0
-                    
+
                     if (current_total + weight) > 1.0001:
                         return False, f"Prelim total exceeds 100%. Current: {int(current_total*100)}%"
 
@@ -99,13 +99,13 @@ class EventService:
             segments = db.query(Segment).filter(Segment.event_id == event_id).all()
             for seg in segments:
                 seg.is_active = False
-            
+
             if segment_id:
                 target = db.query(Segment).get(segment_id)
                 if target:
                     target.is_active = True
                     msg = f"Segment '{target.name}' is now ACTIVE."
-                    
+
                     if not target.is_final:
                         contestants = db.query(Contestant).filter(Contestant.event_id == event_id).all()
                         for c in contestants:
@@ -140,12 +140,12 @@ class EventService:
         db = SessionLocal()
         try:
             exists = db.query(EventJudge).filter(EventJudge.event_id == event_id, EventJudge.judge_id == judge_id).first()
-            
+
             if exists:
                 exists.is_chairman = is_chairman
                 db.commit()
                 return True, "Judge role updated."
-            
+
             new_assign = EventJudge(event_id=event_id, judge_id=judge_id, is_chairman=is_chairman)
             db.add(new_assign)
             db.commit()
@@ -170,19 +170,28 @@ class EventService:
     def get_assigned_judges(self, event_id):
         db = SessionLocal()
         try:
-            # FIX: Use joinedload to fetch User data BEFORE session closes
             return db.query(EventJudge).options(joinedload(EventJudge.judge))\
                      .filter(EventJudge.event_id == event_id).all()
         finally:
             db.close()
-    
-    def update_event_status(self, event_id, status):
+        
+    def update_event_status(self, admin_id, event_id, status):
         """Updates the status of an event (e.g. 'Active', 'Ended')"""
         db = SessionLocal()
         try:
             event = db.query(Event).get(event_id)
             if event:
                 event.status = status
+                
+                # AUDIT LOG
+                log = AuditLog(
+                    user_id=admin_id, 
+                    action="UPDATE_EVENT_STATUS", 
+                    details=f"Changed event '{event.name}' status to {status}", 
+                    timestamp=datetime.datetime.now()
+                )
+                db.add(log)
+                
                 db.commit()
                 return True, f"Event set to {status}"
             return False, "Event not found"

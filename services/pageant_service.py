@@ -1,12 +1,10 @@
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, desc
 from core.database import SessionLocal
-from models.all_models import Segment, Criteria, Score, Contestant, Event, User, JudgeProgress, EventJudge
+from models.all_models import Segment, Criteria, Score, Contestant, Event, User, JudgeProgress, EventJudge, AuditLog
+import datetime
 
 class PageantService:
-     # ---------------------------------------------------------
-    # SEGMENT MANAGEMENT
-    # ---------------------------------------------------------
     def add_segment(self, event_id, name, weight, order, is_final=False, limit=0):
         db = SessionLocal()
         try:
@@ -94,6 +92,7 @@ class PageantService:
     # ---------------------------------------------------------
     # SCORING & UTILS
     # ---------------------------------------------------------
+    # UPDATED: Added Logging
     def submit_score(self, judge_id, contestant_id, criteria_id, score_value):
         db = SessionLocal()
         try:
@@ -116,6 +115,20 @@ class PageantService:
                 )
                 db.add(new_score)
 
+            # AUDIT LOG
+            # Note: Logging every single keystroke/score change might be too much.
+            # But since this is triggered on "Lock & Save", it is appropriate.
+            c_name = db.query(Contestant.name).filter(Contestant.id == contestant_id).scalar()
+            crit_name = db.query(Criteria.name).filter(Criteria.id == criteria_id).scalar()
+            
+            log = AuditLog(
+                user_id=judge_id,
+                action="SCORE_SUBMIT",
+                details=f"Scored {score_value} for '{c_name}' on '{crit_name}'",
+                timestamp=datetime.datetime.now()
+            )
+            db.add(log)
+            
             db.commit()
             return True, "Score saved."
         except Exception as e:
@@ -191,6 +204,9 @@ class PageantService:
         finally:
             db.close()
 
+    # ---------------------------------------------------------
+    # NEW: OVERALL BREAKDOWN (UPDATED WITH JUDGES)
+    # ---------------------------------------------------------
     def get_overall_breakdown(self, event_id):
         db = SessionLocal()
         try:
@@ -204,7 +220,7 @@ class PageantService:
             # 3. Get Judges (Added this part)
             assigned = db.query(User).join(EventJudge).filter(EventJudge.event_id == event_id).order_by(User.name).all()
             judge_list = [u.name for u in assigned]
-            
+
             data = {'Male': [], 'Female': []}
 
             for c in contestants:
@@ -230,9 +246,9 @@ class PageantService:
                     overall_weighted_score += (segment_raw_score * s.percentage_weight)
 
                 row['total'] = round(overall_weighted_score, 2)
-
                 if c.gender in data:
                     data[c.gender].append(row)
+
             for gender in ['Male', 'Female']:
                 data[gender].sort(key=lambda x: x['total'], reverse=True)
                 for i, r in enumerate(data[gender]):
@@ -241,17 +257,16 @@ class PageantService:
             # Return includes 'judges' now
             return {
                 'segments': segment_names,
-                'judges': judge_list, 
+                'judges': judge_list, # <--- NEW
                 'Male': data['Male'],
                 'Female': data['Female']
             }
-        
         finally:
             db.close()
 
-        # ---------------------------------------------------------
-        # TABULATION MATRIX
-        # ---------------------------------------------------------
+    # ---------------------------------------------------------
+    # TABULATION MATRIX
+    # ---------------------------------------------------------
     def get_segment_tabulation(self, event_id, segment_id):
         db = SessionLocal()
         try:
@@ -271,7 +286,6 @@ class PageantService:
                     "scores": [],
                     "total": 0.0
                 }
-
                 judge_totals = []
                 for j_id in judge_ids:
                     j_score = 0.0
@@ -282,15 +296,15 @@ class PageantService:
                             Score.criteria_id == crit.id
                         ).scalar() or 0.0
                         j_score += (val * crit.weight)
-
                     judge_totals.append(round(j_score, 2))
-                row['scores'] = judge_totals
 
+                row['scores'] = judge_totals
                 if judge_totals:
                     row['total'] = round(sum(judge_totals) / len(judge_totals), 2)
 
                 if c.gender in data:
                     data[c.gender].append(row)
+
             for gender in ['Male', 'Female']:
                 data[gender].sort(key=lambda x: x['total'], reverse=True)
                 for i, r in enumerate(data[gender]):
@@ -301,12 +315,9 @@ class PageantService:
                 'Male': data['Male'],
                 'Female': data['Female']
             }
-        
         finally:
             db.close()
-
     def get_all_scores_detailed(self, event_id):
-
         db = SessionLocal()
         try:
             results = db.query(
@@ -375,12 +386,24 @@ class PageantService:
     # ---------------------------------------------------------
     # JUDGE PROGRESS
     # ---------------------------------------------------------
+    # UPDATED: Added Logging
     def mark_judge_finished(self, judge_id, segment_id):
         db = SessionLocal()
         try:
             prog = db.query(JudgeProgress).filter(JudgeProgress.judge_id == judge_id, JudgeProgress.segment_id == segment_id).first()
             if prog: prog.is_finished = True
             else: db.add(JudgeProgress(judge_id=judge_id, segment_id=segment_id, is_finished=True))
+            
+            # AUDIT LOG
+            seg_name = db.query(Segment.name).filter(Segment.id == segment_id).scalar()
+            log = AuditLog(
+                user_id=judge_id,
+                action="SCORE_FINALIZED",
+                details=f"Judge finalized scores for segment '{seg_name}'",
+                timestamp=datetime.datetime.now()
+            )
+            db.add(log)
+            
             db.commit()
             return True
         except: return False
