@@ -5,6 +5,7 @@ from models.all_models import Segment, Score, Contestant, AuditLog
 import datetime
 
 class QuizService:
+    # ... (Keep add_round, update_round, submit_answer as is) ...
     def add_round(self, admin_id, event_id, name, points, total_questions, order, is_final=False, qualifier_limit=0, participating_ids=None, related_id=None):
         db: Session = SessionLocal()
         try:
@@ -13,8 +14,8 @@ class QuizService:
                 exists = db.query(Segment).filter(Segment.event_id == event_id, Segment.order_index == order).first()
                 if exists:
                     return False, f"Round #{order} already exists. Please choose a different sequence number."
-                
-                p_ids_str = None
+
+            p_ids_str = None
             if participating_ids:
                 p_ids_str = ",".join(map(str, participating_ids))
 
@@ -163,43 +164,49 @@ class QuizService:
 
     def get_live_scores(self, event_id, specific_round_id=None, limit_to_participants=None):
         """
-        Calculates scores.
-        - If specific_round_id is set: Returns scores ONLY for that round (resets to 0).
-        - If limit_to_participants (list of IDs) is set: Only returns those contestants.
+        Calculates scores. 
+        - Filters out 'Eliminated' contestants automatically.
+        - Auto-detects if the active round requires "Back to Zero" (Final/Clincher).
         """
         db: Session = SessionLocal()
         results = []
         try:
-            # 1. Determine which contestants to fetch
-            query = db.query(Contestant).filter(Contestant.event_id == event_id)
+            # 1. Determine the context
+            target_round_id = specific_round_id
 
-            # --- UPDATED FILTERING LOGIC ---
-            # If specific_round_id is set (Clincher OR Normal Round with restrictions), check its participating_ids
             active_segment = None
-            if specific_round_id:
-                active_segment = db.query(Segment).get(specific_round_id)
-            else:
-                # If no specific round, try to find the currently active one to apply filtering
+            if not target_round_id:
                 active_segment = db.query(Segment).filter(Segment.event_id == event_id, Segment.is_active == True).first()
+                if active_segment:
+                    if active_segment.is_final or "Clincher" in active_segment.name:
+                        target_round_id = active_segment.id
+            
+            if target_round_id and not active_segment:
+                active_segment = db.query(Segment).get(target_round_id)
 
+            # 2. Determine Contestants to Fetch
+            query = db.query(Contestant).filter(Contestant.event_id == event_id)
+            
+            # --- UPDATE: FILTER ELIMINATED CONTESTANTS ---
+            query = query.filter(Contestant.status == 'Active')
+            
+            # Apply Participant Filters
             if limit_to_participants:
                 query = query.filter(Contestant.id.in_(limit_to_participants))
-            elif active_segment and active_segment.participating_school_ids:
-                # This logic now applies to ALL rounds that have restrictions (Clinchers AND Average/Difficult)
+            elif target_round_id and active_segment and active_segment.participating_school_ids:
                 p_ids = [int(x) for x in active_segment.participating_school_ids.split(",") if x.strip()]
                 query = query.filter(Contestant.id.in_(p_ids))
 
             contestants = query.all()
 
+            # 3. Calculate Scores
             for c in contestants:
-                # Summing Logic
                 score_query = db.query(func.sum(Score.score_value))\
                     .join(Segment, Score.segment_id == Segment.id)\
                     .filter(Score.contestant_id == c.id, Segment.event_id == event_id)
 
-                # Filter sums by round if specific_round_id is active
-                if specific_round_id:
-                    score_query = score_query.filter(Score.segment_id == specific_round_id)
+                if target_round_id:
+                    score_query = score_query.filter(Score.segment_id == target_round_id)
 
                 total_points = score_query.scalar() or 0.0
 
@@ -215,38 +222,71 @@ class QuizService:
         finally:
             db.close()
 
+    def check_round_ties(self, event_id, round_id, limit):
+        scores = self.get_live_scores(event_id, specific_round_id=round_id)
+        if len(scores) <= limit:
+            return False, scores, [], 0
+
+        last_in_score = scores[limit-1]['total_score']
+        first_out_score = scores[limit]['total_score']
+
+        if last_in_score == first_out_score:
+            clean_winners = [s for s in scores if s['total_score'] > last_in_score]
+            tied_contestants = [s for s in scores if s['total_score'] == last_in_score]
+            spots_remaining = limit - len(clean_winners)
+            return True, clean_winners, tied_contestants, spots_remaining
+        
+        return False, scores[:limit], [], 0
+
     def advance_to_next_round(self, admin_id, event_id, current_round_id, qualified_ids):
         """
-        1. Deactivates current round.
-        2. Finds the next round (chronologically), handling clincher pointers.
-        3. Updates next round's participants.
-        4. Activates next round.
+        Advances qualified_ids to next round AND eliminates those who failed to qualify.
         """
         db = SessionLocal()
         try:
             current_round = db.query(Segment).get(current_round_id)
             if not current_round: return False, "Current round not found."
+            
+            # --- UPDATE: ELIMINATION LOGIC ---
+            # 1. Identify who was at risk in the CURRENT round
+            if current_round.participating_school_ids:
+                # E.g. Clincher: Only participants of this clincher are at risk
+                p_ids = [int(x) for x in current_round.participating_school_ids.split(",") if x.strip()]
+                participants_at_risk = db.query(Contestant).filter(Contestant.id.in_(p_ids)).all()
+            else:
+                # E.g. Normal Round: Everyone currently active is at risk
+                participants_at_risk = db.query(Contestant).filter(
+                    Contestant.event_id == event_id,
+                    Contestant.status == 'Active'
+                ).all()
+
+            # 2. Mark losers as Eliminated
+            for c in participants_at_risk:
+                if c.id not in qualified_ids:
+                    c.status = 'Eliminated'
+
+            # --- NEXT ROUND FINDING LOGIC ---
             base_order_index = current_round.order_index
             if current_round.related_segment_id:
                 parent = db.query(Segment).get(current_round.related_segment_id)
                 if parent:
                     base_order_index = parent.order_index
-            
-            # --- FIND NEXT NORMAL ROUND ---
-            # We look for the lowest order index that is strictly greater than the base order
-            # AND is not a clincher (optional check, but order logic should suffice)
+
             next_round = db.query(Segment).filter(
-                Segment.event_id == event_id,
-                Segment.order_index > base_order_index
+                Segment.event_id == event_id,              
+                Segment.order_index > base_order_index,
+                Segment.related_segment_id == None 
             ).order_by(Segment.order_index).first()
 
             if not next_round:
-                return False, "No next round defined! Add a round first."
+                # Even if no next round, the elimination above is valid (Event Over).
+                db.commit()
+                return True, "Event Concluded. Losers eliminated."
 
-            # 2. Deactivate Current
+            # 3. Deactivate Current
             current_round.is_active = False
 
-            # 3. Setup Next Round
+            # 4. Setup Next Round (Clean Winners + New Qualifiers)
             existing_ids = []
             if next_round.participating_school_ids:
                 existing_ids = [int(x) for x in next_round.participating_school_ids.split(",") if x.strip()]
@@ -259,7 +299,7 @@ class QuizService:
             log = AuditLog(
                 user_id=admin_id,
                 action="ADVANCE_ROUND",
-                details=f"Advanced to '{next_round.name}' (Base Order: {base_order_index} -> {next_round.order_index})",
+                details=f"Advanced to '{next_round.name}'. Elimination processed.",
                 timestamp=datetime.datetime.now()
             )
             db.add(log)
@@ -270,7 +310,6 @@ class QuizService:
             return False, str(e)
         finally:
             db.close()
-
 
     def initialize_contestant_round(self, contestant_id, round_id):
         pass

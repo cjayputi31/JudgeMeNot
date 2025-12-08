@@ -3,10 +3,10 @@ from core.database import SessionLocal
 from models.all_models import Contestant
 
 class ContestantService:
-    def add_contestant(self, event_id, number, name, gender, image_path=None):
+    def add_contestant(self, event_id, number, name, gender, image_path=None, assigned_tabulator_id=None):
         db = SessionLocal()
         try:
-            # Check duplicate number for specific gender
+            # 1. Check duplicate number for specific gender
             exists = db.query(Contestant).filter(
                 Contestant.event_id == event_id, 
                 Contestant.candidate_number == number,
@@ -16,13 +16,23 @@ class ContestantService:
             if exists:
                 return False, f"Candidate #{number} ({gender}) already exists."
 
+            # 2. Check Tabulator Availability (One-to-One Rule)
+            if assigned_tabulator_id:
+                is_taken = db.query(Contestant).filter(
+                    Contestant.event_id == event_id,
+                    Contestant.assigned_tabulator_id == assigned_tabulator_id
+                ).first()
+                if is_taken:
+                    return False, f"Tabulator is already assigned to '{is_taken.name}'."
+
             new_c = Contestant(
                 event_id=event_id,
                 candidate_number=number,
                 name=name,
                 gender=gender,
                 image_path=image_path,
-                status="Active"
+                status="Active",
+                assigned_tabulator_id=assigned_tabulator_id
             )
             db.add(new_c)
             db.commit()
@@ -32,14 +42,14 @@ class ContestantService:
         finally:
             db.close()
 
-    def update_contestant(self, contestant_id, number, name, gender, image_path=None):
+    def update_contestant(self, contestant_id, number, name, gender, image_path=None, assigned_tabulator_id=None):
         db = SessionLocal()
         try:
             c = db.query(Contestant).get(contestant_id)
             if not c:
                 return False, "Contestant not found."
 
-            # Check duplicate only if number or gender changed
+            # 1. Check Number/Gender duplicates
             if c.candidate_number != number or c.gender != gender:
                 exists = db.query(Contestant).filter(
                     Contestant.event_id == c.event_id, 
@@ -48,15 +58,24 @@ class ContestantService:
                 ).first()
                 if exists: 
                     return False, f"Candidate #{number} ({gender}) already exists."
+            
+            # 2. Check Tabulator Availability
+            if assigned_tabulator_id and c.assigned_tabulator_id != assigned_tabulator_id:
+                is_taken = db.query(Contestant).filter(
+                    Contestant.event_id == c.event_id,
+                    Contestant.assigned_tabulator_id == assigned_tabulator_id
+                ).first()
+                if is_taken:
+                    return False, f"Tabulator is already assigned to '{is_taken.name}'."
 
             c.candidate_number = number
             c.name = name
             c.gender = gender
-            
-            # Only update image if a new one was provided
+            c.assigned_tabulator_id = assigned_tabulator_id
+
             if image_path:
                 c.image_path = image_path
-            
+
             db.commit()
             return True, "Contestant updated."
         except Exception as e:
@@ -70,23 +89,22 @@ class ContestantService:
             target = db.query(Contestant).get(contestant_id)
             if not target: 
                 return False, "Not found."
-            
+
             event_id = target.event_id
             deleted_number = target.candidate_number
-            
+
             # 1. Delete the contestant
             db.delete(target)
-            
+
             # 2. AUTO-REORDER: Shift numbers down for everyone above this number
-            # (e.g. if #2 is deleted, #3 becomes #2)
             higher_candidates = db.query(Contestant).filter(
                 Contestant.event_id == event_id,
                 Contestant.candidate_number > deleted_number
             ).all()
-            
+
             for c in higher_candidates:
                 c.candidate_number -= 1
-            
+
             db.commit()
             return True, "Deleted and reordered."
         except Exception as e:
