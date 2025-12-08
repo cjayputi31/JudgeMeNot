@@ -1,178 +1,110 @@
 import flet as ft
-import socket # Required for IP detection
+import socket
+import os
+from flet.auth.providers import GoogleOAuthProvider
 from services.auth_service import AuthService
+from core.database import SessionLocal
+
+# Views
 from views.login_view import LoginView
+from views.signup_view import SignupView
+from views.account_setup_view import AccountSetupView
 from views.admin_dashboard import AdminDashboardView
 from views.admin_config_view import AdminConfigView
 from views.judge_view import JudgeView
 from views.tabulator_view import TabulatorView
-from views.viewer_dashboard import EventListView, EventLeaderboardView # <--- UPDATED IMPORT
+from views.viewer_dashboard import EventListView, EventLeaderboardView
+
+def on_google_login(page: ft.Page, auth_service):
+    if page.auth.error:
+        page.snack_bar = ft.SnackBar(ft.Text("Google Login Failed"), bgcolor="red")
+        page.snack_bar.open=True; page.update(); return
+
+    g_id = page.auth.user.get("id")
+    user = auth_service.get_user_by_google_id(g_id)
+    
+    if user:
+        if user.is_pending:
+             page.snack_bar = ft.SnackBar(ft.Text("Account Pending Approval"), bgcolor="red")
+             page.snack_bar.open=True; page.update(); page.logout(); return
+        
+        page.session.set("user_id", user.id)
+        page.session.set("user_role", user.role)
+        page.session.set("user_name", user.name)
+        page.go(f"/{user.role.lower()}")
+    else:
+        # Pass data to setup
+        page.client_storage.set("google_id", g_id)
+        page.client_storage.set("google_email", page.auth.user.get("email"))
+        page.client_storage.set("google_name", page.auth.user.get("name"))
+        page.go("/account-setup")
 
 def main(page: ft.Page):
-    page.title = "JudgeMeNot System"
+    page.title = "JudgeMeNot"
     page.theme_mode = ft.ThemeMode.LIGHT
-    page.assets_dir = "assets"
-
-    # --- WINDOW SETTINGS ---
-    page.window.min_width = 900
-    page.window.min_height = 675
-    page.window.center() 
-
     auth_service = AuthService()
 
-    # --- NAVIGATION GUARD ---
-    # Prevents 'view_pop' from firing during programmatic navigation
-    page.is_navigating = False 
+    
+    # SETUP GOOGLE
+    # Get these from Google Cloud Console
+    CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "YOUR_CLIENT_ID_HERE") 
+    CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "YOUR_CLIENT_SECRET_HERE")
+    
+    google_provider = GoogleOAuthProvider(
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+        redirect_url="http://localhost:8550/api/oauth/redirect"
+    )
+    page.client_storage.set("google_provider", google_provider)
+    page.on_login = lambda e: on_google_login(page, auth_service)
 
     def route_change(route):
-        page.is_navigating = True # Start Navigation Lock
-
-        # 1. Clear previous views
         page.views.clear()
-        # 2. Clear overlays (Dialogs)
-        page.overlay.clear()
+        uid = page.session.get("user_id")
+        role = page.session.get("user_role")
 
-        user_id = page.session.get("user_id")
-        user_role = page.session.get("user_role")
-
-        print(f"🚗 Navigating to: {page.route} | User: {user_role}")
-
-        # --- ROUTE: LOGIN ---
-        if page.route == "/login" or page.route == "/":
-            page.views.append(
-                ft.View(
-                    "/login",
-                    [LoginView(page, on_login_success)],
-                    vertical_alignment=ft.MainAxisAlignment.CENTER,
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    padding=0
-                )
-            )
-
-        # --- ROUTE: ADMIN DASHBOARD ---
-        elif page.route == "/admin":
-            if user_id and user_role in ["Admin", "AdminViewer"]:
-                page.views.append(
-                    ft.View(
-                        "/admin", 
-                        [AdminDashboardView(page, on_logout)],
-                        padding=0 
-                    )
-                )
-            else:
-                page.go("/login")
-
-        # --- ROUTE: EVENT CONFIGURATION ---
-        elif page.route.startswith("/admin/event/"):
-            if user_id and user_role == "Admin": 
-                try:
-                    event_id = int(page.route.split("/")[-1])
-                    page.views.append(
-                        ft.View(
-                            f"/admin/event/{event_id}",
-                            [AdminConfigView(page, event_id)],
-                            padding=0
-                        )
-                    )
-                except ValueError:
-                    page.go("/admin")
-            else:
-                page.go("/login")
-
-        # --- ROUTE: PUBLIC LEADERBOARD GALLERY ---
+        if page.route == "/login":
+            page.views.append(ft.View("/login", [LoginView(page, on_login_success)]))
+        elif page.route == "/signup":
+            page.views.append(ft.View("/signup", [SignupView(page)]))
+        elif page.route == "/account-setup":
+            page.views.append(ft.View("/account-setup", [AccountSetupView(page)]))
+        elif page.route == "/admin" and role == "Admin":
+            page.views.append(ft.View("/admin", [AdminDashboardView(page, on_logout)]))
+        elif page.route.startswith("/admin/event/") and role == "Admin":
+            eid = int(page.route.split("/")[-1])
+            page.views.append(ft.View(f"/admin/event/{eid}", [AdminConfigView(page, eid)]))
+        elif page.route == "/judge" and role == "Judge":
+            page.views.append(ft.View("/judge", [JudgeView(page, on_logout)]))
+        elif page.route == "/tabulator" and role == "Tabulator":
+            page.views.append(ft.View("/tabulator", [TabulatorView(page, on_logout)]))
         elif page.route == "/leaderboard":
-            page.views.append(
-                ft.View(
-                    "/leaderboard",
-                    [EventListView(page)],
-                    padding=0
-                )
-            )
-
-        # --- ROUTE: SPECIFIC EVENT LEADERBOARD ---
+            page.views.append(ft.View("/leaderboard", [EventListView(page)]))
         elif page.route.startswith("/leaderboard/"):
-            try:
-                event_id = int(page.route.split("/")[-1])
-                page.views.append(
-                    ft.View(
-                        f"/leaderboard/{event_id}",
-                        [EventLeaderboardView(page, event_id)],
-                        padding=0
-                    )
-                )
-            except ValueError:
-                page.go("/leaderboard") # Redirect to gallery if ID invalid
-
-        # --- ROUTE: JUDGE INTERFACE ---
-        elif page.route == "/judge":
-            if user_id and user_role == "Judge":
-                page.views.append(
-                    ft.View(
-                        "/judge", 
-                        [JudgeView(page, on_logout)],
-                        padding=0
-                    )
-                )
-            else:
-                page.go("/login")
-
-        # --- ROUTE: TABULATOR ---
-        elif page.route == "/tabulator":
-             if user_id and user_role == "Tabulator":
-                page.views.append(
-                    ft.View(
-                        "/tabulator",
-                        [TabulatorView(page, on_logout)],
-                        padding=0
-                    )
-                )
-             else:
-                page.go("/login")
-
-        # --- CATCH ALL ---
+            eid = int(page.route.split("/")[-1])
+            page.views.append(ft.View(f"/leaderboard/{eid}", [EventLeaderboardView(page, eid)]))
         else:
-            print(f"⚠️ Unknown route: {page.route}, redirecting to login.")
             page.go("/login")
-
         page.update()
-        page.is_navigating = False # Release Lock after update
-
+    
     def view_pop(view):
-        # If we are in the middle of a route change, IGNORE pop events
-        if getattr(page, 'is_navigating', False):
-            return
-
-        if len(page.views) > 1:
-            page.views.pop()
-            top_view = page.views[-1]
-            page.go(top_view.route)
-        else:
-            print("⚠️ Root view reached. Ignoring pop.")
+        page.views.pop()
+        top_view = page.views[-1]
+        page.go(top_view.route)
 
     def on_login_success(user):
         page.session.set("user_id", user.id)
         page.session.set("user_role", user.role)
         page.session.set("user_name", user.name)
-
-        if user.role == "Admin":
-            page.go("/admin")
-        elif user.role == "Judge":
-            page.go("/judge")
-        elif user.role == "Tabulator":
-            page.go("/tabulator")
-        else:
-            page.go("/login")
+        page.go(f"/{user.role.lower()}")
 
     def on_logout(e):
-        print("👋 Logging out...")
         page.session.clear()
         page.go("/login")
 
     page.on_route_change = route_change
     page.on_view_pop = view_pop
-
-    # Initialize app
-    page.go(page.route)
+    page.go("/login")
 
 # --- HELPER: GET LOCAL IP ---
 def get_local_ip():
