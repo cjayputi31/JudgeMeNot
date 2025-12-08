@@ -5,7 +5,8 @@ from views.login_view import LoginView
 from views.admin_dashboard import AdminDashboardView
 from views.admin_config_view import AdminConfigView
 from views.judge_view import JudgeView
-from views.tabulator_view import TabulatorView 
+from views.tabulator_view import TabulatorView
+from views.viewer_dashboard import EventListView, EventLeaderboardView # <--- UPDATED IMPORT
 
 def main(page: ft.Page):
     page.title = "JudgeMeNot System"
@@ -25,7 +26,7 @@ def main(page: ft.Page):
 
     def route_change(route):
         page.is_navigating = True # Start Navigation Lock
-        
+
         # 1. Clear previous views
         page.views.clear()
         # 2. Clear overlays (Dialogs)
@@ -47,7 +48,7 @@ def main(page: ft.Page):
                     padding=0
                 )
             )
-        
+
         # --- ROUTE: ADMIN DASHBOARD ---
         elif page.route == "/admin":
             if user_id and user_role in ["Admin", "AdminViewer"]:
@@ -78,6 +79,30 @@ def main(page: ft.Page):
             else:
                 page.go("/login")
 
+        # --- ROUTE: PUBLIC LEADERBOARD GALLERY ---
+        elif page.route == "/leaderboard":
+            page.views.append(
+                ft.View(
+                    "/leaderboard",
+                    [EventListView(page)],
+                    padding=0
+                )
+            )
+
+        # --- ROUTE: SPECIFIC EVENT LEADERBOARD ---
+        elif page.route.startswith("/leaderboard/"):
+            try:
+                event_id = int(page.route.split("/")[-1])
+                page.views.append(
+                    ft.View(
+                        f"/leaderboard/{event_id}",
+                        [EventLeaderboardView(page, event_id)],
+                        padding=0
+                    )
+                )
+            except ValueError:
+                page.go("/leaderboard") # Redirect to gallery if ID invalid
+
         # --- ROUTE: JUDGE INTERFACE ---
         elif page.route == "/judge":
             if user_id and user_role == "Judge":
@@ -90,7 +115,7 @@ def main(page: ft.Page):
                 )
             else:
                 page.go("/login")
-        
+
         # --- ROUTE: TABULATOR ---
         elif page.route == "/tabulator":
              if user_id and user_role == "Tabulator":
@@ -106,6 +131,7 @@ def main(page: ft.Page):
 
         # --- CATCH ALL ---
         else:
+            print(f"⚠️ Unknown route: {page.route}, redirecting to login.")
             page.go("/login")
 
         page.update()
@@ -144,7 +170,7 @@ def main(page: ft.Page):
 
     page.on_route_change = route_change
     page.on_view_pop = view_pop
-    
+
     # Initialize app
     page.go(page.route)
 
@@ -173,4 +199,3 @@ if __name__ == "__main__":
     # but we print the specific IP above for user convenience.
 
     ft.app(target=main, view=ft.AppView.WEB_BROWSER, port=port, host=my_ip)
-    # ft.app(target=main)

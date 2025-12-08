@@ -10,7 +10,7 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
     admin_service = AdminService()
     event_service = EventService()
     page.assets_dir = "assets"
-    
+
     # GET CURRENT ADMIN ID FOR LOGGING
     current_admin_id = page.session.get("user_id")
 
@@ -54,6 +54,7 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
                 # NAVIGATION & LOGOUT
                 ft.Row(spacing=10, controls=[
                     # Use shared functions
+                    ft.TextButton("LEADERBOARD", icon=ft.Icons.EMOJI_EVENTS, style=ft.ButtonStyle(color=ft.Colors.BLACK), on_click=lambda e: page.go("/leaderboard")),
                     ft.TextButton("ABOUT", style=ft.ButtonStyle(color=ft.Colors.BLACK), on_click=lambda e: show_about_dialog(page)),
                     ft.TextButton("CONTACT", style=ft.ButtonStyle(color=ft.Colors.BLACK), on_click=lambda e: show_contact_dialog(page)),
                     ft.VerticalDivider(width=10, color="transparent"),
@@ -93,7 +94,7 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
         if not new_user_user.value or not new_user_pass.value:
             page.open(ft.SnackBar(ft.Text("Please fill all fields"), bgcolor=ft.Colors.RED))
             return
-        
+
         # PASS ADMIN ID FOR LOGGING
         success, msg = admin_service.create_user(
             current_admin_id,
@@ -102,7 +103,7 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
             new_user_pass.value, 
             new_user_role.value
         )
-        
+
         if success: 
             page.open(ft.SnackBar(ft.Text("User Added!"), bgcolor=ft.Colors.GREEN))
             page.close(user_dialog)
@@ -131,10 +132,10 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
         if not new_event_name.value or not new_event_type.value: 
             page.open(ft.SnackBar(ft.Text("Please fill all fields"), bgcolor=ft.Colors.RED))
             return
-        
+
         # PASS ADMIN ID FOR LOGGING
         success, msg = admin_service.create_event(current_admin_id, new_event_name.value, new_event_type.value)
-        
+
         if success: 
             page.open(ft.SnackBar(ft.Text("Event Created!"), bgcolor=ft.Colors.GREEN))
             page.close(event_dialog)
@@ -169,7 +170,7 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
                     success, msg = admin_service.delete_user(current_admin_id, user_id)
                     color = ft.Colors.GREEN if success else ft.Colors.RED
                     page.open(ft.SnackBar(ft.Text(msg), bgcolor=color))
-                    
+
                     page.close(delete_dialog)
                     load_users_view()
                 except Exception as ex:

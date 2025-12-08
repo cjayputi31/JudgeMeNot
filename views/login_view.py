@@ -4,15 +4,46 @@ Login Screen using Flet - Ultra Clean Version
 
 import flet as ft
 from services.auth_service import AuthService
-from components.dialogs import create_header
+# Updated imports to include dialogs
+from components.dialogs import show_about_dialog, show_contact_dialog
 
 def LoginView(page: ft.Page, on_login_success_callback):
     auth = AuthService()
     page.bgcolor = ft.Colors.WHITE
     page.assets_dir = "assets"
 
-    # ---------------------- HEADER (REUSABLE) ----------------------
-    header = create_header(page)
+    # ---------------------- CUSTOM HEADER ----------------------
+    # Replaced shared 'create_header' with a custom one to include Leaderboard/About/Contact
+    
+    header_logo = ft.Container(
+        width=40, height=40, border_radius=50, bgcolor="transparent",
+        border=ft.border.all(2, ft.Colors.BLUE_800), padding=5,
+        content=ft.Image(src="hammer.png", fit=ft.ImageFit.CONTAIN, error_content=ft.Icon(ft.Icons.GAVEL, color=ft.Colors.BLUE_800))
+    )
+
+    header = ft.Container(
+        height=70, 
+        padding=ft.padding.symmetric(horizontal=40), 
+        bgcolor=ft.Colors.WHITE,
+        shadow=ft.BoxShadow(blur_radius=5, color=ft.Colors.GREY_300),
+        content=ft.Row(
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            controls=[
+                # Left: Logo & Title
+                ft.Row(spacing=10, controls=[
+                    header_logo, 
+                    ft.Text("JUDGEMENOT", size=20, weight="bold", color=ft.Colors.BLUE_900)
+                ]),
+                
+                # Right: Public Navigation
+                ft.Row(spacing=5, controls=[
+                    ft.TextButton("LEADERBOARD", icon=ft.Icons.EMOJI_EVENTS, style=ft.ButtonStyle(color=ft.Colors.BLUE_800), on_click=lambda e: page.go("/leaderboard")),
+                    ft.TextButton("ABOUT", style=ft.ButtonStyle(color=ft.Colors.GREY_700), on_click=lambda e: show_about_dialog(page)),
+                    ft.TextButton("CONTACT", style=ft.ButtonStyle(color=ft.Colors.GREY_700), on_click=lambda e: show_contact_dialog(page)),
+                ])
+            ]
+        )
+    )
 
     # ---------------------- INPUT FIELDS ----------------------
     user_input = ft.TextField(
@@ -182,4 +213,3 @@ def LoginView(page: ft.Page, on_login_success_callback):
                 content=login_box
             )
         ]
-    )
