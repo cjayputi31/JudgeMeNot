@@ -7,7 +7,6 @@ import datetime
 class AdminService:
     # --- HELPER: LOGGING ---
     def log_action(self, user_id, action, details):
-        """Records an action in the audit log"""
         db: Session = SessionLocal()
         try:
             new_log = AuditLog(
@@ -44,23 +43,26 @@ class AdminService:
                 username=username,
                 password_hash=hashed,
                 role=role,
-                is_active=True
+                is_active=True,
+                is_pending=False # Admin created users are auto-approved
             )
             db.add(new_user)
             db.commit()
-            
-            # LOG IT
+
             self.log_action(admin_id, "CREATE_USER", f"Created user '{username}' as {role}")
-            
             return True, "User created successfully."
         except Exception as e:
             return False, str(e)
         finally:
             db.close()
 
-    def update_user(self, admin_id, user_id, name, username, role, password=None):
+    # --- UPDATED FUNCTION HERE ---
+    def update_user(self, admin_id, user_id, name, username, role, password=None, is_pending=False, is_active=True):
         db: Session = SessionLocal()
         try:
+            if not user_id:
+                return False, "Invalid User ID"
+                
             user = db.query(User).get(user_id)
             if not user: return False, "User not found"
 
@@ -68,22 +70,22 @@ class AdminService:
             user.name = name
             user.username = username
             user.role = role
+            user.is_pending = is_pending
+            user.is_active = is_active
 
             details = f"Updated profile for '{username}'"
             if old_role != role:
                 details += f" (Role: {old_role}->{role})"
+            if is_pending is False and is_active is True:
+                details += " [Account Approved/Active]"
 
-            # Only update password if a new one is provided
             if password:
                 salt = bcrypt.gensalt()
                 user.password_hash = bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
                 details += " [Password Changed]"
 
             db.commit()
-            
-            # LOG IT
             self.log_action(admin_id, "UPDATE_USER", details)
-            
             return True, "User updated successfully."
         except Exception as e:
             return False, str(e)
@@ -95,14 +97,12 @@ class AdminService:
         try:
             user = db.query(User).get(user_id)
             if not user: return False, "User not found"
-            
+
             username = user.username
             db.delete(user)
             db.commit()
-            
-            # LOG IT
+
             self.log_action(admin_id, "DELETE_USER", f"Deleted user '{username}'")
-            
             return True, "User deleted successfully."
         except Exception as e:
             return False, str(e)
@@ -121,15 +121,12 @@ class AdminService:
         try:
             new_event = Event(
                 name=name,
-                event_type=event_type, # 'Pageant' or 'QuizBee'
+                event_type=event_type, 
                 status='Active'
             )
             db.add(new_event)
             db.commit()
-            
-            # LOG IT
             self.log_action(admin_id, "CREATE_EVENT", f"Created event '{name}' ({event_type})")
-            
             return True, "Event created successfully."
         except Exception as e:
             return False, str(e)
@@ -137,7 +134,6 @@ class AdminService:
             db.close()
 
     def get_all_judges(self):
-        """Returns only users with role='Judge'"""
         db = SessionLocal()
         try:
             return db.query(User).filter(User.role == "Judge").all()
@@ -145,7 +141,6 @@ class AdminService:
             db.close()
 
     def get_security_logs(self):
-        """Fetches all audit logs with the associated Username"""
         db: Session = SessionLocal()
         try:
             return db.query(AuditLog)\
