@@ -5,22 +5,16 @@ from models.all_models import Segment, Score, Contestant, AuditLog
 import datetime
 
 class QuizService:
-    # ... (Keep add_round, update_round, submit_answer as is) ...
-    def add_round(self, admin_id, event_id, name, points, total_questions, order, is_final=False, qualifier_limit=0, participating_ids=None):
-        """
-        Adds a round with specific quiz settings.
-        participating_ids: List of Contestant IDs allowed in this round (for Clinchers).
-        """
+    def add_round(self, admin_id, event_id, name, points, total_questions, order, is_final=False, qualifier_limit=0, participating_ids=None, related_id=None):
         db: Session = SessionLocal()
         try:
-            # Check if order index exists
-            exists = db.query(Segment).filter(Segment.event_id == event_id, Segment.order_index == order).first()
-
-            if exists:
-                return False, f"Round #{order} already exists. Please choose a different sequence number."
-
-            # Convert list to comma-separated string if provided
-            p_ids_str = None
+            # Only check order conflict if NOT a clincher (clinchers are appended)
+            if not related_id:
+                exists = db.query(Segment).filter(Segment.event_id == event_id, Segment.order_index == order).first()
+                if exists:
+                    return False, f"Round #{order} already exists. Please choose a different sequence number."
+                
+                p_ids_str = None
             if participating_ids:
                 p_ids_str = ",".join(map(str, participating_ids))
 
@@ -32,19 +26,14 @@ class QuizService:
                 order_index=order,
                 is_final=is_final,
                 qualifier_limit=qualifier_limit,
-                participating_school_ids=p_ids_str, # Store here
+                participating_school_ids=p_ids_str,
+                related_segment_id=related_id, # Link to parent
                 percentage_weight=0,
                 is_active=False
             )
             db.add(new_round)
 
-            # AUDIT LOG
-            log = AuditLog(
-                user_id=admin_id,
-                action="ADD_ROUND",
-                details=f"Added Round {order}: '{name}' (Qualifiers: {qualifier_limit})",
-                timestamp=datetime.datetime.now()
-            )
+            log = AuditLog(user_id=admin_id, action="ADD_ROUND", details=f"Added Round {order}: '{name}'", timestamp=datetime.datetime.now())
             db.add(log)
 
             db.commit()
@@ -73,7 +62,7 @@ class QuizService:
                 ).first()
                 if exists:
                     return False, f"Round #{order} already exists."
-            
+
             # Update fields
             target.name = name
             target.points_per_question = points
@@ -90,10 +79,9 @@ class QuizService:
                 timestamp=datetime.datetime.now()
             )
             db.add(log)
-            
+
             db.commit()
             return True, "Round updated."
-        
         except Exception as e:
             return False, str(e)
         finally:
@@ -108,15 +96,15 @@ class QuizService:
             target = db.query(Segment).get(round_id)
             if not target:
                 return False, "Round not found."
-            
+
             round_name = target.name
-            
+
             # 1. Delete associated scores first (Cascade usually handles this, but explicit is safer)
             db.query(Score).filter(Score.segment_id == round_id).delete()
-            
+
             # 2. Delete the round
             db.delete(target)
-            
+
             # AUDIT LOG
             log = AuditLog(
                 user_id=admin_id,
@@ -125,7 +113,7 @@ class QuizService:
                 timestamp=datetime.datetime.now()
             )
             db.add(log)
-            
+
             db.commit()
             return True, "Round deleted."
         except Exception as e:
@@ -167,7 +155,6 @@ class QuizService:
                 db.add(new_score)
 
             db.commit()
-
             return True, "Answer recorded."
         except Exception as e:
             return False, str(e)
@@ -185,7 +172,7 @@ class QuizService:
         try:
             # 1. Determine which contestants to fetch
             query = db.query(Contestant).filter(Contestant.event_id == event_id)
-            
+
             # --- UPDATED FILTERING LOGIC ---
             # If specific_round_id is set (Clincher OR Normal Round with restrictions), check its participating_ids
             active_segment = None
@@ -209,7 +196,7 @@ class QuizService:
                 score_query = db.query(func.sum(Score.score_value))\
                     .join(Segment, Score.segment_id == Segment.id)\
                     .filter(Score.contestant_id == c.id, Segment.event_id == event_id)
-                
+
                 # Filter sums by round if specific_round_id is active
                 if specific_round_id:
                     score_query = score_query.filter(Score.segment_id == specific_round_id)
@@ -227,60 +214,63 @@ class QuizService:
 
         finally:
             db.close()
-    
+
     def advance_to_next_round(self, admin_id, event_id, current_round_id, qualified_ids):
         """
         1. Deactivates current round.
-        2. Finds the next round (chronologically).
-        3. Updates next round's participating_school_ids with qualified_ids.
+        2. Finds the next round (chronologically), handling clincher pointers.
+        3. Updates next round's participants.
         4. Activates next round.
         """
         db = SessionLocal()
         try:
             current_round = db.query(Segment).get(current_round_id)
             if not current_round: return False, "Current round not found."
+            base_order_index = current_round.order_index
+            if current_round.related_segment_id:
+                parent = db.query(Segment).get(current_round.related_segment_id)
+                if parent:
+                    base_order_index = parent.order_index
             
-            # 1. Find Next Round
-            # Logic: Find round with order > current_order
+            # --- FIND NEXT NORMAL ROUND ---
+            # We look for the lowest order index that is strictly greater than the base order
+            # AND is not a clincher (optional check, but order logic should suffice)
             next_round = db.query(Segment).filter(
                 Segment.event_id == event_id,
-                Segment.order_index > current_round.order_index
+                Segment.order_index > base_order_index
             ).order_by(Segment.order_index).first()
-            
+
             if not next_round:
                 return False, "No next round defined! Add a round first."
 
             # 2. Deactivate Current
             current_round.is_active = False
-            
+
             # 3. Setup Next Round
-            # Merge existing participants (if any) with new qualifiers
-            # This handles the "Clincher survivors rejoin qualifiers" scenario
             existing_ids = []
             if next_round.participating_school_ids:
                 existing_ids = [int(x) for x in next_round.participating_school_ids.split(",") if x.strip()]
-            
-            # Combine unique IDs
+
             combined_ids = list(set(existing_ids + qualified_ids))
             next_round.participating_school_ids = ",".join(map(str, combined_ids))
             next_round.is_active = True
-            
+
             # Log
             log = AuditLog(
                 user_id=admin_id,
                 action="ADVANCE_ROUND",
-                details=f"Advanced {len(qualified_ids)} participants from '{current_round.name}' to '{next_round.name}'",
+                details=f"Advanced to '{next_round.name}' (Base Order: {base_order_index} -> {next_round.order_index})",
                 timestamp=datetime.datetime.now()
             )
             db.add(log)
-            
-            db.commit()
 
+            db.commit()
             return True, f"Advanced to {next_round.name}"
         except Exception as e:
             return False, str(e)
         finally:
             db.close()
+
 
     def initialize_contestant_round(self, contestant_id, round_id):
         pass

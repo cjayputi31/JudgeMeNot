@@ -1,6 +1,6 @@
 import datetime
 from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Boolean, Text
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 from core.database import Base
 
 # ---------------------------------------------------------
@@ -64,12 +64,17 @@ class Segment(Base):
     total_questions = Column(Integer, default=10)
 
     # NEW: Store IDs of participants allowed in this round (comma-separated: "1,5,9")
-    # This is critical for Clincher rounds where only tied schools participate.
     participating_school_ids = Column(String(255), nullable=True) 
+
+    # NEW: Link to Parent Round (for Clinchers to know where they came from)
+    related_segment_id = Column(Integer, ForeignKey('segments.id'), nullable=True)
     
     event = relationship("Event", back_populates="segments")
     criteria = relationship("Criteria", back_populates="segment")
     scores = relationship("Score", back_populates="segment")
+    
+    # Self-referential relationship (optional helper)
+    children = relationship("Segment", backref=backref('parent', remote_side=[id]))
 
 
 class Criteria(Base):
