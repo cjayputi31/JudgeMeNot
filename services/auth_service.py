@@ -1,6 +1,7 @@
 import bcrypt
+import datetime
 from sqlalchemy.orm import Session
-from models.all_models import User
+from models.all_models import User, AuditLog
 from core.database import SessionLocal
 
 class AuthService:
@@ -8,6 +9,7 @@ class AuthService:
         """
         Verifies credentials. 
         Returns: The User object if successful, None if failed.
+        Logs successful logins to the AuditLog table.
         """
         db: Session = SessionLocal()
         try:
@@ -23,6 +25,21 @@ class AuthService:
                     return "DISABLED" 
                 if user.is_pending:
                     return "PENDING"
+                
+                # --- NEW: LOG THE LOGIN EVENT ---
+                try:
+                    log = AuditLog(
+                        user_id=user.id,
+                        action="LOGIN",
+                        details=f"User '{user.username}' ({user.role}) logged in.",
+                        timestamp=datetime.datetime.now()
+                    )
+                    db.add(log)
+                    db.commit()
+                except Exception as e:
+                    print(f"Logging Failed: {e}") 
+                # --------------------------------
+                
                 return user
             else:
                 return None
