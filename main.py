@@ -27,8 +27,8 @@ def main(page: ft.Page):
     page.padding = 0 
     
     # Minimum Size (Prevents UI breaking on tiny resize)
-    page.window.min_width = 1200
-    page.window.min_height = 800
+    page.window.min_width = 500
+    page.window.min_height = 700
     
     # Starting Size (Default Desktop View)
     page.window.width = 1200
@@ -37,9 +37,21 @@ def main(page: ft.Page):
     
     auth_service = AuthService()
     
-    # NOTE: Google Auth setup has been removed as per request.
-    
     def route_change(route):
+        # ---------------------------------------------------------
+        # 🔒 ANDROID LOCK (DEPLOYMENT MODE)
+        # ---------------------------------------------------------
+        # Detect if the user is accessing via an Android device
+        user_agent = page.client_user_agent or ""
+        is_android = "Android" in user_agent or page.platform == ft.PagePlatform.ANDROID
+
+        # If on Android, BLOCK access to anything except Leaderboards
+        if is_android:
+            if not page.route.startswith("/leaderboard"):
+                page.go("/leaderboard")
+                return # Stop processing to prevent the restricted view from loading
+        # ---------------------------------------------------------
+
         page.views.clear()
         uid = page.session.get("user_id")
         role = page.session.get("user_role")
@@ -52,16 +64,14 @@ def main(page: ft.Page):
         elif page.route == "/signup":
             page.views.append(ft.View("/signup", [SignupView(page)], padding=0))
         
-        # --- ADMIN ROUTING (UPDATED FOR ADMINVIEWER) ---
-        # Allow both 'Admin' and 'AdminViewer' to access the dashboard
+        # /account-setup route removed
+        
         elif page.route == "/admin" and role in ["Admin", "AdminViewer"]:
             page.views.append(ft.View("/admin", [AdminDashboardView(page, on_logout)], padding=0))
-            
-        # Allow both to access event configuration (Read-only logic handled inside views)
+        
         elif page.route.startswith("/admin/event/") and role in ["Admin", "AdminViewer"]:
             eid = int(page.route.split("/")[-1])
             page.views.append(ft.View(f"/admin/event/{eid}", [AdminConfigView(page, eid)], padding=0))
-        # -----------------------------------------------
         
         elif page.route == "/judge" and role == "Judge":
             page.views.append(ft.View("/judge", [JudgeView(page, on_logout)], padding=0))
@@ -87,7 +97,6 @@ def main(page: ft.Page):
         page.session.set("user_role", user.role)
         page.session.set("user_name", user.name)
         
-        # Route logic
         if user.role in ["Admin", "AdminViewer"]:
             page.go("/admin")
         else:
