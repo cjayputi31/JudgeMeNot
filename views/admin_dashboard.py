@@ -196,12 +196,37 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
         
         # FIXED: Correctly defined and implemented with feedback
         def toggle_event_status(e, status):
-            success, msg = event_service.update_event_status(current_admin_id, e.control.data, status)
+            # Check if e is just an ID (when called directly) or a control event
+            event_id = e if isinstance(e, int) else e.control.data
+            
+            success, msg = event_service.update_event_status(current_admin_id, event_id, status)
             if success:
                 page.open(ft.SnackBar(ft.Text(msg), bgcolor="green"))
                 load_events_view()
             else:
                 page.open(ft.SnackBar(ft.Text(f"Error: {msg}"), bgcolor="red"))
+        
+        # --- NEW: DELETE EVENT HANDLER ---
+        def delete_event_click(e):
+            ev_id = e.control.data
+            def confirm_del(ev):
+                success, msg = admin_service.delete_event(current_admin_id, ev_id)
+                page.close(del_evt_dlg)
+                if success:
+                    page.open(ft.SnackBar(ft.Text(msg), bgcolor="green"))
+                    load_events_view()
+                else:
+                    page.open(ft.SnackBar(ft.Text(f"Error: {msg}"), bgcolor="red"))
+
+            del_evt_dlg = ft.AlertDialog(
+                title=ft.Text("Delete Event?"), 
+                content=ft.Text("WARNING: This will delete ALL scores, segments, and data for this event. Irreversible."), 
+                actions=[
+                    ft.TextButton("Cancel", on_click=lambda _: page.close(del_evt_dlg)), 
+                    ft.ElevatedButton("Delete Forever", on_click=confirm_del, bgcolor="red", color="white")
+                ]
+            )
+            page.open(del_evt_dlg)
 
         cards = []
         for e in events:
@@ -209,25 +234,26 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
             status_color = "green" if is_active else "grey"
             icon = ft.Icons.WOMAN if e.event_type == "Pageant" else ft.Icons.LIGHTBULB
             
-            # Choose image based on type
             bg_image = "pageant.png" if e.event_type == "Pageant" else "quiz.png"
             
             # ACTION ROW: Hide status controls if read only
             if not is_read_only:
+                # If active, button stops it. If ended/inactive, button starts it.
                 if e.status == "Active":
-                    action_control = ft.IconButton(icon=ft.Icons.STOP_CIRCLE, icon_color="red", tooltip="End Event", data=e.id, on_click=lambda x: toggle_event_status(x, "Ended"))
+                    action_icon = ft.IconButton(icon=ft.Icons.STOP_CIRCLE, icon_color="red", tooltip="End Event", data=e.id, on_click=lambda x: toggle_event_status(x, "Ended"))
                 else:
-                    action_control = ft.IconButton(icon=ft.Icons.PLAY_CIRCLE_FILL, icon_color="green", tooltip="Activate Event", data=e.id, on_click=lambda x: toggle_event_status(x, "Active"))
+                    action_icon = ft.IconButton(icon=ft.Icons.PLAY_CIRCLE_FILL, icon_color="green", tooltip="Activate Event", data=e.id, on_click=lambda x: toggle_event_status(x, "Active"))
                 
-                # Popup menu
+                # Popup menu now includes DELETE
                 popup_menu = ft.PopupMenuButton(
                     items=[
-                        ft.PopupMenuItem(text="Activate", on_click=lambda x, eid=e.id: toggle_event_status(x, "Active"), data=e.id),
-                        ft.PopupMenuItem(text="End Event", on_click=lambda x, eid=e.id: toggle_event_status(x, "Ended"), data=e.id),
+                        ft.PopupMenuItem(text="Activate", on_click=lambda x, eid=e.id: toggle_event_status(eid, "Active")),
+                        ft.PopupMenuItem(text="End Event", on_click=lambda x, eid=e.id: toggle_event_status(eid, "Ended")),
+                        ft.PopupMenuItem(text="Delete Event", icon=ft.Icons.DELETE, on_click=delete_event_click, data=e.id),
                     ]
                 )
             else:
-                action_control = ft.Container() # Empty
+                action_icon = ft.Container() # Empty
                 popup_menu = ft.Container() # Empty
 
             card = ft.Container(
@@ -236,7 +262,7 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
                         ft.Container(content=ft.Icon(icon, color="white"), padding=10, bgcolor="#64AEFF", border_radius=10),
                         ft.Column([
                             ft.Text(e.name, weight="bold", size=16, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
-                            ft.Text(f"{e.event_type} • {e.status}", color=status_color, size=12, weight="bold")
+                            ft.Text(f"{e.event_type} • {e.status}", color=status_color, size=12)
                         ], spacing=2, expand=True),
                         popup_menu
                     ], alignment=ft.MainAxisAlignment.START),
@@ -244,7 +270,10 @@ def AdminDashboardView(page: ft.Page, on_logout_callback):
                     # SPACER forces the button to the bottom
                     ft.Container(expand=True),
                     
-                    ft.ElevatedButton("Manage Event", width=float("inf"), bgcolor="#E3F2FD", color="#1565C0", data=e.id, on_click=lambda x: page.go(f"/admin/event/{x.control.data}"))
+                    ft.Row([
+                        ft.ElevatedButton("Manage", expand=True, bgcolor="#E3F2FD", color="#1565C0", data=e.id, on_click=lambda x: page.go(f"/admin/event/{x.control.data}")),
+                        action_icon
+                    ], alignment="spaceBetween")
                 ]),
                 padding=20,
                 width=300, 

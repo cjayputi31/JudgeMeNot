@@ -1,7 +1,7 @@
 import bcrypt
 from sqlalchemy.orm import Session, joinedload
 from core.database import SessionLocal
-from models.all_models import User, Event, AuditLog
+from models.all_models import User, Event, AuditLog, Segment, Criteria, Score, Contestant, EventJudge
 import datetime
 
 class AdminService:
@@ -129,6 +129,49 @@ class AdminService:
             self.log_action(admin_id, "CREATE_EVENT", f"Created event '{name}' ({event_type})")
             return True, "Event created successfully."
         except Exception as e:
+            return False, str(e)
+        finally:
+            db.close()
+
+    # --- NEW: DELETE EVENT (Cascading) ---
+    def delete_event(self, admin_id, event_id):
+        """
+        Deletes an event and all associated data (segments, scores, contestants).
+        """
+        db: Session = SessionLocal()
+        try:
+            event = db.query(Event).get(event_id)
+            if not event: return False, "Event not found"
+            
+            event_name = event.name
+            
+            # Note: SQLAlchemy cascade="all, delete" usually handles this if models are set up right.
+            # But explicit deletion is safer for SQLite/MySQL if constraints vary.
+            
+            # 1. Delete Scores (linked to segments/contestants)
+            # Find segments first
+            segment_ids = [s.id for s in db.query(Segment).filter(Segment.event_id == event_id).all()]
+            if segment_ids:
+                 db.query(Score).filter(Score.segment_id.in_(segment_ids)).delete(synchronize_session=False)
+                 db.query(Criteria).filter(Criteria.segment_id.in_(segment_ids)).delete(synchronize_session=False)
+            
+            # 2. Delete Segments
+            db.query(Segment).filter(Segment.event_id == event_id).delete(synchronize_session=False)
+            
+            # 3. Delete Contestants
+            db.query(Contestant).filter(Contestant.event_id == event_id).delete(synchronize_session=False)
+
+            # 4. Delete EventJudges
+            db.query(EventJudge).filter(EventJudge.event_id == event_id).delete(synchronize_session=False)
+
+            # 5. Delete Event
+            db.delete(event)
+            
+            db.commit()
+            self.log_action(admin_id, "DELETE_EVENT", f"Deleted event '{event_name}' and all related data.")
+            return True, "Event deleted successfully."
+        except Exception as e:
+            db.rollback()
             return False, str(e)
         finally:
             db.close()
