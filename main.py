@@ -115,6 +115,7 @@ def get_local_ip():
     return IP
 
 if __name__ == "__main__":
+    # my_ip = "192.168.43.175"
     my_ip = get_local_ip()
     port = 8550
     print(f"--------------------------------------------------")
